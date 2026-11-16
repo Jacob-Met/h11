@@ -1493,3 +1493,75 @@ def test_special_exceptions_for_lost_connection_in_message_body() -> None:
     with pytest.raises(RemoteProtocolError) as excinfo:
         c.next_event()
     assert "incomplete chunked read" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("role", [CLIENT, SERVER])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("Content-Length", "9"),
+        ("Transfer-Encoding", "chunked"),
+        ("Host", "attacker.example"),
+        ("Trailer", "Host"),
+        ("Connection", "keep-alive"),
+        ("TE", "trailers"),
+        ("Upgrade", "websocket"),
+    ],
+)
+def test_outgoing_chunked_rejects_forbidden_trailer_field(
+    role: Type[Sentinel], name: str, value: str
+) -> None:
+    c = Connection(role)
+    if role is CLIENT:
+        c.send(
+            Request(
+                method="POST",
+                target="/",
+                headers=[
+                    ("Host", "example.com"),
+                    ("Transfer-Encoding", "chunked"),
+                ],
+            )
+        )
+    else:
+        c.receive_data(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        assert isinstance(c.next_event(), Request)
+        assert isinstance(c.next_event(), EndOfMessage)
+        c.send(Response(status_code=200, headers=[("Transfer-Encoding", "chunked")]))
+    with pytest.raises(LocalProtocolError, match="forbidden trailer"):
+        c.send(EndOfMessage(headers=[("X-Checksum", "ok"), (name, value)]))
+    assert c.our_state is ERROR
+
+
+@pytest.mark.parametrize("role", [CLIENT, SERVER])
+def test_outgoing_chunked_keeps_safe_trailer_field(role: Type[Sentinel]) -> None:
+    c = Connection(role)
+    if role is CLIENT:
+        c.send(
+            Request(
+                method="POST",
+                target="/",
+                headers=[
+                    ("Host", "example.com"),
+                    ("Transfer-Encoding", "chunked"),
+                ],
+            )
+        )
+    else:
+        c.receive_data(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+        c.next_event()
+        c.next_event()
+        c.send(Response(status_code=200, headers=[("Transfer-Encoding", "chunked")]))
+    assert c.send(EndOfMessage(headers=[("X-Checksum", "ok")])) == (
+        b"0\r\nX-Checksum: ok\r\n\r\n"
+    )
+
+
+def test_invalid_chunked_trailer_writer_emits_nothing() -> None:
+    from .._writers import ChunkedWriter
+
+    emitted: List[bytes] = []
+    trailers = EndOfMessage(headers=[("X-Checksum", "ok"), ("Host", "fake.test")])
+    with pytest.raises(LocalProtocolError, match="forbidden trailer"):
+        ChunkedWriter().send_eom(trailers.headers, emitted.append)
+    assert emitted == []

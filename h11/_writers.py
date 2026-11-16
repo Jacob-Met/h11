@@ -98,6 +98,21 @@ class ContentLengthWriter(BodyWriter):
             raise LocalProtocolError("Content-Length and trailers don't mix")
 
 
+# Framing, routing, and hop-by-hop control fields cannot be trailers.
+# RFC 9110 section 6.5.1; RFC 7230 section 4.1.2.
+_FORBIDDEN_TRAILER_FIELDS = frozenset(
+    (
+        b"content-length",
+        b"transfer-encoding",
+        b"host",
+        b"trailer",
+        b"connection",
+        b"te",
+        b"upgrade",
+    )
+)
+
+
 class ChunkedWriter(BodyWriter):
     def send_data(self, data: bytes, write: Writer) -> None:
         # if we encoded 0-length data in the naive way, it would look like an
@@ -109,6 +124,9 @@ class ChunkedWriter(BodyWriter):
         write(b"\r\n")
 
     def send_eom(self, headers: Headers, write: Writer) -> None:
+        for _, name, _ in headers._full_items:
+            if name in _FORBIDDEN_TRAILER_FIELDS:
+                raise LocalProtocolError(f"forbidden trailer field: {name!r}")
         write(b"0\r\n")
         write_headers(headers, write)
 
