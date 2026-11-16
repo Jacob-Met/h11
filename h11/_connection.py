@@ -290,9 +290,18 @@ class Connection:
         # Outbound messages are normalized before this state transition.
         peer_conflict = (
             role is self.their_role
-            and type(event) in (Request, Response)
-            and _has_conflicting_framing(cast(Union[Request, Response], event).headers)
+            and type(event) in (Request, Response, InformationalResponse)
+            and _has_conflicting_framing(
+                cast(Union[Request, Response, InformationalResponse], event).headers
+            )
         )
+        if (
+            peer_conflict
+            and role is SERVER
+            and type(event) is InformationalResponse
+            and event.status_code == 101
+        ):
+            raise RemoteProtocolError("Conflicting message framing on protocol switch")
         # A conflicting CONNECT/Upgrade request must not switch protocols,
         # which would bypass the mandatory close (RFC 9112 section 6.1).
         if role is CLIENT and type(event) is Request and not peer_conflict:
@@ -583,6 +592,20 @@ class Connection:
                     target=event.target,
                     headers=set_comma_header(event.headers, b"content-length", []),
                     http_version=event.http_version,
+                )
+            if type(event) is InformationalResponse and (
+                get_comma_header(event.headers, b"content-length")
+                or get_comma_header(event.headers, b"transfer-encoding")
+            ):
+                # Informational responses do not carry message bodies, so
+                # neither framing header is valid (RFC 9110 section 8.6).
+                headers = set_comma_header(event.headers, b"content-length", [])
+                headers = set_comma_header(headers, b"transfer-encoding", [])
+                event = InformationalResponse(
+                    status_code=event.status_code,
+                    headers=headers,
+                    http_version=event.http_version,
+                    reason=event.reason,
                 )
             if type(event) is Response:
                 event = self._clean_up_response_headers_for_sending(event)

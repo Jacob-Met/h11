@@ -480,6 +480,98 @@ def test_ambiguous_upgrade_request_cannot_switch_with_101(headers: bytes) -> Non
         )
 
 
+@pytest.mark.parametrize("status_code", [100, 101])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("Content-Length", "7"), ("Transfer-Encoding", "chunked")],
+        [("Transfer-Encoding", "chunked"), ("Content-Length", "7")],
+    ],
+)
+def test_ambiguous_informational_response_outgoing_headers_removed(
+    status_code: int, headers: List[Tuple[str, str]]
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(
+        b"GET / HTTP/1.1\r\nHost: example\r\n"
+        b"Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n"
+    )
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    wire = c.send(
+        InformationalResponse(
+            status_code=status_code,
+            headers=headers + [("Connection", "Upgrade"), ("Upgrade", "websocket")],
+        )
+    )
+    assert b"Content-Length:" not in wire
+    assert b"Transfer-Encoding:" not in wire
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_informational_101_upgrade_is_rejected(
+    framing_headers: bytes,
+) -> None:
+    c = Connection(CLIENT)
+    c.send(
+        Request(
+            method="GET",
+            target="/",
+            headers=[
+                ("Host", "example"),
+                ("Connection", "Upgrade"),
+                ("Upgrade", "websocket"),
+            ],
+        )
+    )
+    c.send(EndOfMessage())
+    c.receive_data(
+        b"HTTP/1.1 101 Switching Protocols\r\n"
+        b"Connection: Upgrade\r\nUpgrade: websocket\r\n" + framing_headers + b"\r\n"
+    )
+    with pytest.raises(RemoteProtocolError):
+        c.next_event()
+    assert c.their_state is ERROR
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_informational_100_disables_keepalive(
+    framing_headers: bytes,
+) -> None:
+    c = Connection(CLIENT)
+    c.send(
+        Request(
+            method="POST",
+            target="/",
+            headers=[("Host", "example"), ("Content-Length", "0")],
+        )
+    )
+    c.send(EndOfMessage())
+    c.receive_data(
+        b"HTTP/1.1 100 Continue\r\n"
+        + framing_headers
+        + b"\r\n"
+        + b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+    )
+    assert isinstance(c.next_event(), InformationalResponse)
+    assert isinstance(c.next_event(), Response)
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.their_state is MUST_CLOSE
+    assert c.our_state is MUST_CLOSE
+
+
 def test_automagic_connection_close_handling() -> None:
     p = ConnectionPair()
     # If the user explicitly sets Connection: close, then we notice and

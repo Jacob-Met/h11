@@ -1,1 +1,1 @@
-Conflicting Content-Length and Transfer-Encoding headers no longer allow connection reuse or protocol upgrades. Outgoing requests and responses omit conflicting Content-Length.
+Conflicting Content-Length and Transfer-Encoding no longer leave a connection reusable or permit protocol switches. Outgoing requests and responses remove invalid framing headers, including on informational responses.
