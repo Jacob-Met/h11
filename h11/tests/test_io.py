@@ -112,6 +112,19 @@ def tr(reader: Any, data: bytes, expected: Any) -> None:
     assert bytes(buf) == b"trailing"
 
 
+@pytest.mark.parametrize(
+    "status, expected",
+    [(200, b"HTTP/1.1 200 OK\r\n\r\n"), (404, b"HTTP/1.1 404 Not Found\r\n\r\n")],
+)
+def test_default_reason_on_wire(status: int, expected: bytes) -> None:
+    response = Response(status_code=status, headers=[])
+    assert dowrite(write_any_response, response) == expected
+    explicit_empty = Response(status_code=status, headers=[], reason=b"")
+    assert (
+        dowrite(write_any_response, explicit_empty) == b"HTTP/1.1 %d \r\n\r\n" % status
+    )
+
+
 def test_writers_simple() -> None:
     for (role, state), event, binary in SIMPLE_CASES:
         tw(WRITERS[role, state], event, binary)
