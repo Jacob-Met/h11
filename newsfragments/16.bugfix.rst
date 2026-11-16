@@ -1,0 +1,1 @@
+Avoid quadratic-time parsing of malformed chunk extensions with long whitespace runs.\n

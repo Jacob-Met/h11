@@ -124,9 +124,11 @@ chunk_size = r"({HEXDIG}){{1,20}}".format(**globals())
 chunk_ext = r";.*"
 chunk_header = (
     r"(?P<chunk_size>{chunk_size})"
-    r"(?P<chunk_ext>{chunk_ext})?"
-    r"{OWS}\r\n".format(
-        **globals()
-    )  # Even though the specification does not allow for extra whitespaces,
-    # we are lenient with trailing whitespaces because some servers on the wild use it.
+    # The extension and the no-extension whitespace are mutually exclusive.
+    # Keeping their quantifiers in separate branches prevents quadratic
+    # backtracking on malformed lines with long whitespace suffixes.
+    r"(?:(?P<chunk_ext>{chunk_ext})|{OWS})"
+    r"\r\n".format(**globals())
+    # Even though the specification does not allow for extra whitespace,
+    # we are lenient when no extension is present for legacy servers.
 )
