@@ -49,10 +49,11 @@ field_name = token
 # that they're legal in practice (e.g., google analytics makes cookies with
 # \x01 in them!):
 #   https://github.com/python-hyper/h11/issues/57
-# We still don't allow NUL or whitespace, because those are often treated as
-# meta-characters and letting them through can lead to nasty issues like SSRF.
+# NUL, CR, and LF remain forbidden, and HTTP tab/space are only allowed
+# between non-whitespace bytes. Unlike Python's \s, Fetch's header-value
+# definition permits vertical tab and form feed.
 vchar = r"[\x21-\x7e]"
-vchar_or_obs_text = r"[^\x00\s]"
+vchar_or_obs_text = r"[^\x00\r\n\t ]"
 field_vchar = vchar_or_obs_text
 field_content = r"{field_vchar}+(?:[ \t]+{field_vchar}+)*".format(**globals())
 
