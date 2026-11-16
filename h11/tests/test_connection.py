@@ -600,7 +600,7 @@ def test_protocol_switch() -> None:
                 headers=[("Host", "foo"), ("Content-Length", "1")],
             ),
             Response(status_code=404, headers=[(b"transfer-encoding", b"chunked")]),
-            Response(status_code=200, headers=[(b"transfer-encoding", b"chunked")]),
+            Response(status_code=200, headers=[]),
         ),
         (
             Request(
@@ -618,8 +618,8 @@ def test_protocol_switch() -> None:
                 headers=[("Host", "foo"), ("Content-Length", "1"), ("Upgrade", "a, b")],
             ),
             Response(status_code=404, headers=[(b"transfer-encoding", b"chunked")]),
-            # Accept CONNECT, not upgrade
-            Response(status_code=200, headers=[(b"transfer-encoding", b"chunked")]),
+            # Accept CONNECT, not upgrade; successful tunnels cannot have framing.
+            Response(status_code=200, headers=[]),
         ),
         (
             Request(

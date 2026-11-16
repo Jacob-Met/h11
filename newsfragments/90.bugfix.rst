@@ -1,0 +1,1 @@
+Reject received messages with conflicting Transfer-Encoding and Content-Length, and normalize outgoing conflicting or forbidden framing headers instead of transmitting them.

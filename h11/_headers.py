@@ -203,6 +203,8 @@ def normalize_and_validate(
             new_headers.append((raw_name, name, value))
         else:
             new_headers.append((raw_name, name, value))
+    if _parsed and saw_transfer_encoding and seen_content_length is not None:
+        raise LocalProtocolError("both Transfer-Encoding and Content-Length headers")
     return Headers(new_headers)
 
 

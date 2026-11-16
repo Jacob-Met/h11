@@ -1,5 +1,6 @@
 # This contains the main Connection class. Everything in h11 revolves around
 # this.
+from dataclasses import replace
 from typing import (
     Any,
     Callable,
@@ -552,6 +553,24 @@ class Connection:
         if self.our_state is ERROR:
             raise LocalProtocolError("Can't send data when our state is ERROR")
         try:
+            if (
+                isinstance(event, (Request, Response, InformationalResponse))
+                and get_comma_header(event.headers, b"transfer-encoding")
+                and get_comma_header(event.headers, b"content-length")
+            ):
+                event = replace(
+                    event,
+                    headers=set_comma_header(event.headers, b"content-length", []),
+                )
+            if type(event) is InformationalResponse and (
+                get_comma_header(event.headers, b"content-length")
+                or get_comma_header(event.headers, b"transfer-encoding")
+            ):
+                headers = set_comma_header(event.headers, b"content-length", [])
+                event = replace(
+                    event,
+                    headers=set_comma_header(headers, b"transfer-encoding", []),
+                )
             if type(event) is Response:
                 event = self._clean_up_response_headers_for_sending(event)
             # We want to call _process_event before calling the writer,
@@ -643,6 +662,11 @@ class Connection:
                     need_close = True
             else:
                 headers = set_comma_header(headers, b"transfer-encoding", [b"chunked"])
+        elif response.status_code == 204 or (
+            self._request_method == b"CONNECT" and 200 <= response.status_code < 300
+        ):
+            headers = set_comma_header(headers, b"content-length", [])
+            headers = set_comma_header(headers, b"transfer-encoding", [])
 
         if not self._cstate.keep_alive or need_close:
             # Make sure Connection: close is set
