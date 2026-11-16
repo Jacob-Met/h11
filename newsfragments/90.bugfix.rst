@@ -1,0 +1,1 @@
+A message containing both Content-Length and Transfer-Encoding no longer leaves the connection reusable when received. Sent requests and responses omit conflicting Content-Length.

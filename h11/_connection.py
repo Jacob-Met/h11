@@ -87,6 +87,13 @@ def _keep_alive(event: Union[Request, Response]) -> bool:
         return False
     if getattr(event, "http_version", b"1.1") < b"1.1":
         return False
+    # A peer that sends both framing headers must not use a persistent
+    # connection, even though Transfer-Encoding determines body length.
+    # RFC 9112 section 6.1.
+    if get_comma_header(event.headers, b"transfer-encoding") and get_comma_header(
+        event.headers, b"content-length"
+    ):
+        return False
     return True
 
 
@@ -552,6 +559,19 @@ class Connection:
         if self.our_state is ERROR:
             raise LocalProtocolError("Can't send data when our state is ERROR")
         try:
+            if (
+                type(event) is Request
+                and get_comma_header(event.headers, b"transfer-encoding")
+                and get_comma_header(event.headers, b"content-length")
+            ):
+                # A sender must not include Content-Length with
+                # Transfer-Encoding (RFC 9112 section 6.2).
+                event = Request(
+                    method=event.method,
+                    target=event.target,
+                    headers=set_comma_header(event.headers, b"content-length", []),
+                    http_version=event.http_version,
+                )
             if type(event) is Response:
                 event = self._clean_up_response_headers_for_sending(event)
             # We want to call _process_event before calling the writer,
@@ -643,6 +663,9 @@ class Connection:
                     need_close = True
             else:
                 headers = set_comma_header(headers, b"transfer-encoding", [b"chunked"])
+        elif get_comma_header(headers, b"transfer-encoding"):
+            # Bodyless responses also must not send both framing headers.
+            headers = set_comma_header(headers, b"content-length", [])
 
         if not self._cstate.keep_alive or need_close:
             # Make sure Connection: close is set

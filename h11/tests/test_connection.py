@@ -11,6 +11,7 @@ from .._events import (
     Request,
     Response,
 )
+from .._headers import get_comma_header
 from .._state import (
     CLIENT,
     CLOSED,
@@ -331,6 +332,94 @@ def test_automatic_transfer_encoding_in_response() -> None:
             == b"HTTP/1.1 200 \r\nConnection: close\r\n\r\n"
         )
         assert c.send(Data(data=b"12345")) == b"12345"
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_incoming_request_cannot_reuse_connection(
+    framing_headers: bytes,
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(
+        b"POST / HTTP/1.1\r\nHost: example.com\r\n" + framing_headers + b"\r\n0\r\n\r\n"
+    )
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.their_state is MUST_CLOSE
+
+    response = c.send(Response(status_code=200, headers=[("Content-Length", "0")]))
+    assert b"Connection: close\r\n" in response
+    c.send(EndOfMessage())
+    assert c.our_state is MUST_CLOSE
+    with pytest.raises(LocalProtocolError, match="not in a reusable state"):
+        c.start_next_cycle()
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_incoming_response_cannot_reuse_connection(
+    framing_headers: bytes,
+) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="GET", target="/", headers=[("Host", "example.com")]))
+    c.send(EndOfMessage())
+    c.receive_data(b"HTTP/1.1 200 OK\r\n" + framing_headers + b"\r\n0\r\n\r\n")
+    assert isinstance(c.next_event(), Response)
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.our_state is MUST_CLOSE
+    assert c.their_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        [("Content-Length", "7"), ("Transfer-Encoding", "chunked")],
+        [("Transfer-Encoding", "chunked"), ("Content-Length", "7")],
+    ],
+)
+def test_ambiguous_outgoing_request_removes_content_length(
+    framing_headers: List[Tuple[str, str]]
+) -> None:
+    c = Connection(CLIENT)
+    request = Request(
+        method="POST", target="/", headers=[("Host", "example.com")] + framing_headers
+    )
+    wire = c.send(request)
+    assert b"Transfer-Encoding: chunked\r\n" in wire
+    assert b"Content-Length:" not in wire
+    assert c._cstate.keep_alive
+    assert get_comma_header(request.headers, b"content-length") == [b"7"]
+
+
+@pytest.mark.parametrize("status_code", [204, 304])
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        [("Content-Length", "7"), ("Transfer-Encoding", "chunked")],
+        [("Transfer-Encoding", "chunked"), ("Content-Length", "7")],
+    ],
+)
+def test_ambiguous_outgoing_bodyless_response_removes_content_length(
+    status_code: int, framing_headers: List[Tuple[str, str]]
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+
+    wire = c.send(Response(status_code=status_code, headers=framing_headers))
+    assert b"Transfer-Encoding: chunked\r\n" in wire
+    assert b"Content-Length:" not in wire
 
 
 def test_automagic_connection_close_handling() -> None:
