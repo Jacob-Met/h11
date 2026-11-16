@@ -228,7 +228,7 @@ def normalize_and_validate(
         raw_name = name
         name = name.lower()
         if name == b"content-length":
-            lengths = {length.strip() for length in value.split(b",")}
+            lengths = {length.strip(b" \t") for length in value.split(b",")}
             if len(lengths) != 1:
                 raise LocalProtocolError("conflicting Content-Length headers")
             value = lengths.pop()
@@ -305,7 +305,7 @@ def get_comma_header(headers: Headers, name: bytes) -> List[bytes]:
         if found_name == name:
             found_raw_value = found_raw_value.lower()
             for found_split_value in found_raw_value.split(b","):
-                found_split_value = found_split_value.strip()
+                found_split_value = found_split_value.strip(b" \t")
                 if found_split_value:
                     out.append(found_split_value)
     return out
