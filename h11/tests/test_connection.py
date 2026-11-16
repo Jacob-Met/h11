@@ -385,7 +385,7 @@ def test_ambiguous_incoming_response_cannot_reuse_connection(
     ],
 )
 def test_ambiguous_outgoing_request_removes_content_length(
-    framing_headers: List[Tuple[str, str]]
+    framing_headers: List[Tuple[str, str]],
 ) -> None:
     c = Connection(CLIENT)
     request = Request(
@@ -1503,6 +1503,64 @@ def test_outgoing_chunked_keeps_safe_trailer_field(role: Type[Sentinel]) -> None
     assert c.send(EndOfMessage(headers=[("X-Checksum", "ok")])) == (
         b"0\r\nX-Checksum: ok\r\n\r\n"
     )
+
+
+@pytest.mark.parametrize("role", [CLIENT, SERVER])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        (b"Host", b"forged.test"),
+        (b"Content-Length", b"999"),
+        (b"TRANSFER-ENCODING", b"chunked"),
+        (b"Authorization", b"Bearer forged"),
+        (b"Proxy-Authorization", b"Basic forged"),
+        (b"Set-Cookie", b"session=forged"),
+        (b"Connection", b"keep-alive"),
+        (b"Cache-Control", b"public"),
+    ],
+)
+def test_incoming_chunked_rejects_forbidden_trailer_field(
+    role: Type[Sentinel], name: bytes, value: bytes
+) -> None:
+    c = Connection(role)
+    if role is SERVER:
+        c.receive_data(
+            b"POST / HTTP/1.1\r\n"
+            b"Host: legitimate.test\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n"
+        )
+        assert isinstance(c.next_event(), Request)
+    else:
+        c.send(Request(method="GET", target="/", headers=[("Host", "legitimate.test")]))
+        c.send(EndOfMessage())
+        c.receive_data(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+        assert isinstance(c.next_event(), Response)
+
+    c.receive_data(b"0\r\nX-Checksum: ok\r\n" + name + b": " + value + b"\r\n\r\n")
+    with pytest.raises(RemoteProtocolError, match="forbidden trailer field"):
+        c.next_event()
+    assert c.their_state is ERROR
+
+
+@pytest.mark.parametrize("role", [CLIENT, SERVER])
+def test_incoming_chunked_keeps_safe_trailer_field(role: Type[Sentinel]) -> None:
+    c = Connection(role)
+    if role is SERVER:
+        c.receive_data(
+            b"POST / HTTP/1.1\r\nHost: legitimate.test\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n"
+        )
+        assert isinstance(c.next_event(), Request)
+    else:
+        c.send(Request(method="GET", target="/", headers=[("Host", "legitimate.test")]))
+        c.send(EndOfMessage())
+        c.receive_data(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+        assert isinstance(c.next_event(), Response)
+
+    c.receive_data(b"0\r\nX-Checksum: good\r\n\r\n")
+    event = c.next_event()
+    assert isinstance(event, EndOfMessage)
+    assert event.headers == [(b"x-checksum", b"good")]
 
 
 def test_invalid_chunked_trailer_writer_emits_nothing() -> None:
