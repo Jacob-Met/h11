@@ -8,6 +8,7 @@
 import re
 from abc import ABC
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import List, Tuple, Union
 
 from ._abnf import method, request_target
@@ -140,7 +141,7 @@ class _ResponseBase(Event):
         headers: Union[Headers, List[Tuple[bytes, bytes]], List[Tuple[str, str]]],
         status_code: int,
         http_version: Union[bytes, str] = b"1.1",
-        reason: Union[bytes, str] = b"",
+        reason: Union[bytes, str, None] = None,
         _parsed: bool = False,
     ) -> None:
         super().__init__()
@@ -151,15 +152,20 @@ class _ResponseBase(Event):
                 self, "headers", normalize_and_validate(headers, _parsed=_parsed)
             )
         if not _parsed:
-            object.__setattr__(self, "reason", bytesify(reason))
-            object.__setattr__(self, "http_version", bytesify(http_version))
             if not isinstance(status_code, int):
                 raise LocalProtocolError("status code must be integer")
+            if reason is None:
+                try:
+                    reason = HTTPStatus(status_code).phrase
+                except ValueError:
+                    reason = b""
+            object.__setattr__(self, "reason", bytesify(reason))
+            object.__setattr__(self, "http_version", bytesify(http_version))
             # Because IntEnum objects are instances of int, but aren't
             # duck-compatible (sigh), see gh-72.
             object.__setattr__(self, "status_code", int(status_code))
         else:
-            object.__setattr__(self, "reason", reason)
+            object.__setattr__(self, "reason", b"" if reason is None else reason)
             object.__setattr__(self, "http_version", http_version)
             object.__setattr__(self, "status_code", status_code)
 
@@ -200,6 +206,8 @@ class InformationalResponse(_ResponseBase):
 
        The reason phrase of this response, as a byte string. For example:
        ``b"OK"``, or ``b"Not Found"``.
+       If omitted, a standard phrase is used for known status codes;
+       pass ``b""`` to send an empty phrase.
 
     """
 
@@ -241,6 +249,8 @@ class Response(_ResponseBase):
 
        The reason phrase of this response, as a byte string. For example:
        ``b"OK"``, or ``b"Not Found"``.
+       If omitted, a standard phrase is used for known status codes;
+       pass ``b""`` to send an empty phrase.
 
     """
 

@@ -1,4 +1,5 @@
 from http import HTTPStatus
+from typing import Callable, Union
 
 import pytest
 
@@ -121,6 +122,32 @@ def test_events() -> None:
 
     cc = ConnectionClosed()
     assert repr(cc) == "ConnectionClosed()"
+
+
+@pytest.mark.parametrize(
+    "event_type, status, expected",
+    [
+        (InformationalResponse, 100, b"Continue"),
+        (Response, 200, b"OK"),
+        (Response, 404, b"Not Found"),
+        (Response, 599, b""),
+    ],
+)
+def test_default_reason_phrase(
+    event_type: Callable[..., Union[Response, InformationalResponse]],
+    status: int,
+    expected: bytes,
+) -> None:
+    event = event_type(status_code=status, headers=[])
+    assert event.reason == expected
+    assert event_type(status_code=status, headers=[], reason=b"").reason == b""
+    assert (
+        event_type(status_code=status, headers=[], reason="Custom").reason == b"Custom"
+    )
+    assert (
+        event_type(status_code=status, headers=[], reason=b"", _parsed=True).reason
+        == b""
+    )
 
 
 def test_intenum_status_code() -> None:
