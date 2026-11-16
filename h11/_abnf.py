@@ -64,9 +64,9 @@ field_value = r"({field_content})?".format(**globals())
 header_field = (
     r"(?P<field_name>{field_name})"
     r":"
-    r"{OWS}"
-    r"(?P<field_value>{field_value})"
-    r"{OWS}".format(**globals())
+    # The empty-value path must not split its whitespace between two
+    # overlapping OWS quantifiers: invalid lines could take quadratic time.
+    r"(?:{OWS}(?P<field_value>{field_content}){OWS}|{OWS})".format(**globals())
 )
 
 # https://svn.tools.ietf.org/svn/wg/httpbis/specs/rfc7230.html#request.line

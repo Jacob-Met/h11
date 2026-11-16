@@ -584,6 +584,30 @@ def test_host_comes_first() -> None:
     )
 
 
+def test_header_line_invalid_whitespace_scales_linearly() -> None:
+    # Two adjacent OWS quantifiers on the empty-value path must not partition
+    # every possible split of a malformed header's whitespace.
+    def parse(size: int) -> float:
+        buf = ReceiveBuffer()
+        buf += (
+            b"GET / HTTP/1.1\r\nHost: example.com\r\n"
+            + b"X-Test:"
+            + b" " * size
+            + b"\x00\r\n\r\n"
+        )
+        reader = READERS[CLIENT, IDLE]
+        assert callable(reader)
+        start = perf_counter()
+        with pytest.raises(LocalProtocolError):
+            reader(buf)
+        return perf_counter() - start
+
+    parse(16)
+    small = min(parse(512) for _ in range(3))
+    large = min(parse(8192) for _ in range(3))
+    assert large < small * 64, (small, large)
+
+
 def test_chunked_reader_malformed_extension_scales_linearly() -> None:
     # An embedded bare LF is invalid, but can precede a complete CRLF line.
     # Regression guard: the extension and trailing OWS regex branches must not
