@@ -341,6 +341,54 @@ def test_automatic_transfer_encoding_in_response() -> None:
         b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
     ],
 )
+def test_ambiguous_received_request_never_exposes_content_length(
+    framing_headers: bytes,
+) -> None:
+    # An ASGI proxy can forward the event's headers unchanged; do not expose
+    # the incompatible Content-Length that Transfer-Encoding overrides.
+    c = Connection(SERVER)
+    c.receive_data(
+        b"POST / HTTP/1.1\r\nHost: example.com\r\n" + framing_headers + b"\r\n0\r\n\r\n"
+    )
+    request = c.next_event()
+    assert isinstance(request, Request)
+    assert get_comma_header(request.headers, b"transfer-encoding") == [b"chunked"]
+    assert get_comma_header(request.headers, b"content-length") == []
+    assert not c._cstate.keep_alive
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.their_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_received_response_never_exposes_content_length(
+    framing_headers: bytes,
+) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="GET", target="/", headers=[("Host", "example.com")]))
+    c.send(EndOfMessage())
+    c.receive_data(b"HTTP/1.1 200 OK\r\n" + framing_headers + b"\r\n0\r\n\r\n")
+    response = c.next_event()
+    assert isinstance(response, Response)
+    assert get_comma_header(response.headers, b"transfer-encoding") == [b"chunked"]
+    assert get_comma_header(response.headers, b"content-length") == []
+    assert not c._cstate.keep_alive
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.their_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
 def test_ambiguous_incoming_request_cannot_reuse_connection(
     framing_headers: bytes,
 ) -> None:

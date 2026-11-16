@@ -531,6 +531,28 @@ class Connection:
             event = self._extract_next_receive_event()
             if event not in [NEED_DATA, PAUSED]:
                 self._process_event(self.their_role, cast(Event, event))
+                if (
+                    isinstance(event, (Request, Response))
+                    and not self._cstate.keep_alive
+                    and _has_conflicting_framing(event.headers)
+                ):
+                    # A forwarding caller must not send the overridden
+                    # Content-Length to another HTTP implementation.
+                    headers = set_comma_header(event.headers, b"content-length", [])
+                    if isinstance(event, Request):
+                        event = Request(
+                            method=event.method,
+                            target=event.target,
+                            headers=headers,
+                            http_version=event.http_version,
+                        )
+                    else:
+                        event = Response(
+                            status_code=event.status_code,
+                            headers=headers,
+                            http_version=event.http_version,
+                            reason=event.reason,
+                        )
             if event is NEED_DATA:
                 if len(self._receive_buffer) > self._max_incomplete_event_size:
                     # 431 is "Request header fields too large" which is pretty

@@ -1,1 +1,1 @@
-Malformed message-length headers no longer allow persistent reuse or protocol switches, including malformed informational, 204, and successful CONNECT responses. Outgoing requests and responses normalize forbidden or conflicting framing fields.
+Conflicting Content-Length and Transfer-Encoding no longer permit persistent reuse or protocol switches, and received requests and responses strip the overridden Content-Length before exposure to forwarding callers. Sending strips forbidden framing headers from informational, 204, and successful CONNECT responses.
