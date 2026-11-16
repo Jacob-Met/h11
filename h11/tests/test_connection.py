@@ -1565,3 +1565,46 @@ def test_invalid_chunked_trailer_writer_emits_nothing() -> None:
     with pytest.raises(LocalProtocolError, match="forbidden trailer"):
         ChunkedWriter().send_eom(trailers.headers, emitted.append)
     assert emitted == []
+
+
+@pytest.mark.parametrize("status", [100, 103, 204])
+@pytest.mark.parametrize(
+    "framing",
+    [
+        b"Content-Length: 7\r\n",
+        b"Transfer-Encoding: chunked\r\n",
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+    ],
+)
+def test_forbidden_framing_not_exposed_on_received_bodyless_events(
+    status: int, framing: bytes
+) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="GET", target="/", headers=[("Host", "example.com")]))
+    c.send(EndOfMessage())
+    c.receive_data(
+        b"HTTP/1.1 " + str(status).encode("ascii") + b" Test\r\n" + framing + b"\r\n"
+    )
+    response = c.next_event()
+    assert isinstance(response, (Response, InformationalResponse))
+    assert response.status_code == status
+    assert response.reason == b"Test"
+    assert get_comma_header(response.headers, b"content-length") == []
+    assert get_comma_header(response.headers, b"transfer-encoding") == []
+    assert not c._cstate.keep_alive
+
+
+@pytest.mark.parametrize("status", [200, 304])
+def test_normal_received_content_length_is_preserved(status: int) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="GET", target="/", headers=[("Host", "example.com")]))
+    c.send(EndOfMessage())
+    c.receive_data(
+        b"HTTP/1.1 "
+        + str(status).encode("ascii")
+        + b" Test\r\nContent-Length: 7\r\n\r\n"
+    )
+    response = c.next_event()
+    assert isinstance(response, Response)
+    assert get_comma_header(response.headers, b"content-length") == [b"7"]
+    assert c._cstate.keep_alive

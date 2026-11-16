@@ -1,5 +1,6 @@
 # This contains the main Connection class. Everything in h11 revolves around
 # this.
+from dataclasses import replace
 from typing import (
     Any,
     Callable,
@@ -531,27 +532,31 @@ class Connection:
             event = self._extract_next_receive_event()
             if event not in [NEED_DATA, PAUSED]:
                 self._process_event(self.their_role, cast(Event, event))
-                if (
-                    not self._cstate.keep_alive
-                    and isinstance(event, (Request, Response))
-                    and _has_conflicting_framing(event.headers)
+                if not self._cstate.keep_alive and isinstance(
+                    event, (Request, Response, InformationalResponse)
                 ):
-                    # A forwarding caller must not send the overridden
-                    # Content-Length to another HTTP implementation.
-                    headers = set_comma_header(event.headers, b"content-length", [])
-                    if isinstance(event, Request):
-                        event = Request(
-                            method=event.method,
-                            target=event.target,
-                            headers=headers,
-                            http_version=event.http_version,
-                        )
-                    else:
-                        event = Response(
-                            status_code=event.status_code,
-                            headers=headers,
-                            http_version=event.http_version,
-                            reason=event.reason,
+                    no_framing_allowed = type(event) is InformationalResponse or (
+                        type(event) is Response and event.status_code == 204
+                    )
+                    if no_framing_allowed and (
+                        get_comma_header(event.headers, b"content-length")
+                        or get_comma_header(event.headers, b"transfer-encoding")
+                    ):
+                        # Bodyless peer responses must not expose forbidden
+                        # framing to callers that forward their headers.
+                        headers = set_comma_header(event.headers, b"content-length", [])
+                        headers = set_comma_header(headers, b"transfer-encoding", [])
+                        event = replace(event, headers=headers)
+                    elif not no_framing_allowed and _has_conflicting_framing(
+                        event.headers
+                    ):
+                        # For regular messages, Transfer-Encoding overrides
+                        # Content-Length, which cannot be forwarded.
+                        event = replace(
+                            event,
+                            headers=set_comma_header(
+                                event.headers, b"content-length", []
+                            ),
                         )
             if event is NEED_DATA:
                 if len(self._receive_buffer) > self._max_incomplete_event_size:
