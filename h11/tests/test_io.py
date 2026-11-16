@@ -543,6 +543,19 @@ def test_reject_garbage_after_request_line() -> None:
         tr(READERS[SERVER, SEND_RESPONSE], b"HTTP/1.0 200 OK\x00xxxx\r\n\r\n", None)
 
 
+@pytest.mark.parametrize("control", [b"\x0b", b"\x0c"])
+def test_status_reason_rejects_controls_permitted_in_header_values(
+    control: bytes,
+) -> None:
+    # Field-value leniency must not leak into status-line reason parsing.
+    with pytest.raises(LocalProtocolError):
+        tr(
+            READERS[SERVER, SEND_RESPONSE],
+            b"HTTP/1.1 200 Reason" + control + b"Text\r\n\r\n",
+            None,
+        )
+
+
 def test_reject_garbage_after_response_line() -> None:
     with pytest.raises(LocalProtocolError):
         tr(
