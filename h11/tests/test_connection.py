@@ -1608,3 +1608,39 @@ def test_normal_received_content_length_is_preserved(status: int) -> None:
     assert isinstance(response, Response)
     assert get_comma_header(response.headers, b"content-length") == [b"7"]
     assert c._cstate.keep_alive
+
+
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("Authorization", "Bearer token"),
+        ("Proxy-Authorization", "Basic Zm9vOmJhcg=="),
+        ("Cookie", "session=evil"),
+        ("Set-Cookie", "session=evil"),
+        ("Content-Type", "text/html"),
+        ("Content-Encoding", "gzip"),
+        ("Content-Range", "bytes 0-10/200"),
+        ("Location", "/target"),
+        ("Cache-Control", "no-store"),
+        ("If-Match", '"etag"'),
+        ("Range", "bytes=1-3"),
+        ("Expect", "100-continue"),
+    ],
+)
+def test_outgoing_chunked_rejects_sensitive_trailer_field(
+    name: str, value: str
+) -> None:
+    c = Connection(CLIENT)
+    c.send(
+        Request(
+            method="POST",
+            target="/",
+            headers=[
+                ("Host", "example.com"),
+                ("Transfer-Encoding", "chunked"),
+            ],
+        )
+    )
+    with pytest.raises(LocalProtocolError, match="forbidden trailer"):
+        c.send(EndOfMessage(headers=[("X-Checksum", "ok"), (name, value)]))
+    assert c.our_state is ERROR

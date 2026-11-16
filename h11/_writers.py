@@ -102,13 +102,39 @@ class ContentLengthWriter(BodyWriter):
 # RFC 9110 section 6.5.1; RFC 7230 section 4.1.2.
 _FORBIDDEN_TRAILER_FIELDS = frozenset(
     (
-        b"content-length",
-        b"transfer-encoding",
+        # Routing and hop-by-hop controls
         b"host",
-        b"trailer",
         b"connection",
+        b"proxy-connection",
+        b"keep-alive",
         b"te",
         b"upgrade",
+        # Message framing, content format, and representation metadata
+        b"content-length",
+        b"transfer-encoding",
+        b"trailer",
+        b"content-type",
+        b"content-encoding",
+        b"content-range",
+        b"content-disposition",
+        b"content-language",
+        b"content-location",
+        # Authentication and request/response controls
+        b"authorization",
+        b"proxy-authorization",
+        b"www-authenticate",
+        b"proxy-authenticate",
+        b"cookie",
+        b"set-cookie",
+        b"location",
+        b"cache-control",
+        b"if-match",
+        b"if-none-match",
+        b"if-modified-since",
+        b"if-unmodified-since",
+        b"if-range",
+        b"range",
+        b"expect",
     )
 )
 
