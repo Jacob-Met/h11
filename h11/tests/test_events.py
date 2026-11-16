@@ -173,3 +173,9 @@ def test_header_casing() -> None:
         (b"Host", b"example.org"),
         (b"Connection", b"keep-alive"),
     ]
+
+
+def test_data_event_retains_mutable_buffer_without_extra_copy() -> None:
+    payload = bytearray(b"large body")
+    event = Data(payload)
+    assert event.data is payload

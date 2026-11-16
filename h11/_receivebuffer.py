@@ -1,6 +1,8 @@
 import re
 import sys
-from typing import List, Optional, Union
+from typing import List, Optional
+
+from ._util import ReadableBuffer
 
 __all__ = ["ReceiveBuffer"]
 
@@ -50,7 +52,7 @@ class ReceiveBuffer:
         self._next_line_search = 0
         self._multiple_lines_search = 0
 
-    def __iadd__(self, byteslike: Union[bytes, bytearray]) -> "ReceiveBuffer":
+    def __iadd__(self, byteslike: ReadableBuffer) -> "ReceiveBuffer":
         self._data += byteslike
         return self
 

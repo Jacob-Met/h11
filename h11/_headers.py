@@ -1,18 +1,18 @@
 import re
 from typing import (
-    TYPE_CHECKING,
     AnyStr,
+    cast,
     Iterable,
     List,
+    overload,
     Sequence,
     Tuple,
+    TYPE_CHECKING,
     Union,
-    cast,
-    overload,
 )
 
 from ._abnf import field_name, field_value
-from ._util import LocalProtocolError, bytesify, validate
+from ._util import bytesify, LocalProtocolError, validate
 
 if TYPE_CHECKING:
     from ._events import Request
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 try:
     from typing import Literal
 except ImportError:
-    from typing_extensions import Literal  # type: ignore
+    from typing_extensions import Literal  # type: ignore[assignment, unused-ignore]
 
 CONTENT_LENGTH_MAX_DIGITS = 20  # allow up to 1 billion TB - 1
 
@@ -191,19 +191,20 @@ HeaderTypes = Union[
 
 
 @overload
-def normalize_and_validate(headers: Headers, _parsed: Literal[True]) -> Headers: ...
+def normalize_and_validate(headers: Headers, _parsed: Literal[True]) -> Headers:
+    ...
 
 
 @overload
-def normalize_and_validate(
-    headers: HeaderTypes, _parsed: Literal[False]
-) -> Headers: ...
+def normalize_and_validate(headers: HeaderTypes, _parsed: Literal[False]) -> Headers:
+    ...
 
 
 @overload
 def normalize_and_validate(
     headers: Union[Headers, HeaderTypes], _parsed: bool = False
-) -> Headers: ...
+) -> Headers:
+    ...
 
 
 def normalize_and_validate(

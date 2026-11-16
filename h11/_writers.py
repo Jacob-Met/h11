@@ -16,7 +16,7 @@ from ._util import LocalProtocolError, Sentinel
 
 __all__ = ["WRITERS"]
 
-Writer = Callable[[bytes], Any]
+Writer = Callable[[Union[bytes, bytearray]], Any]
 
 
 def write_headers(headers: Headers, write: Writer) -> None:
@@ -60,7 +60,7 @@ class BodyWriter:
         else:  # pragma: no cover
             assert False
 
-    def send_data(self, data: bytes, write: Writer) -> None:
+    def send_data(self, data: Union[bytes, bytearray], write: Writer) -> None:
         pass
 
     def send_eom(self, headers: Headers, write: Writer) -> None:
@@ -77,7 +77,7 @@ class ContentLengthWriter(BodyWriter):
     def __init__(self, length: int) -> None:
         self._length = length
 
-    def send_data(self, data: bytes, write: Writer) -> None:
+    def send_data(self, data: Union[bytes, bytearray], write: Writer) -> None:
         self._length -= len(data)
         if self._length < 0:
             raise LocalProtocolError("Too much data for declared Content-Length")
@@ -91,7 +91,7 @@ class ContentLengthWriter(BodyWriter):
 
 
 class ChunkedWriter(BodyWriter):
-    def send_data(self, data: bytes, write: Writer) -> None:
+    def send_data(self, data: Union[bytes, bytearray], write: Writer) -> None:
         # if we encoded 0-length data in the naive way, it would look like an
         # end-of-message.
         if not data:
@@ -107,7 +107,7 @@ class ChunkedWriter(BodyWriter):
 
 
 class Http10Writer(BodyWriter):
-    def send_data(self, data: bytes, write: Writer) -> None:
+    def send_data(self, data: Union[bytes, bytearray], write: Writer) -> None:
         write(data)
 
     def send_eom(self, headers: Headers, write: Writer) -> None:
