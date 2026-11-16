@@ -418,7 +418,10 @@ def test_ambiguous_outgoing_bodyless_response_removes_content_length(
     assert isinstance(c.next_event(), EndOfMessage)
 
     wire = c.send(Response(status_code=status_code, headers=framing_headers))
-    assert b"Transfer-Encoding: chunked\r\n" in wire
+    if status_code == 204:
+        assert b"Transfer-Encoding:" not in wire
+    else:
+        assert b"Transfer-Encoding: chunked\r\n" in wire
     assert b"Content-Length:" not in wire
 
 
@@ -570,6 +573,50 @@ def test_ambiguous_informational_100_disables_keepalive(
     assert isinstance(c.next_event(), EndOfMessage)
     assert c.their_state is MUST_CLOSE
     assert c.our_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("Content-Length", "7")],
+        [("Transfer-Encoding", "chunked")],
+        [("Content-Length", "7"), ("Transfer-Encoding", "chunked")],
+        [("Transfer-Encoding", "chunked"), ("Content-Length", "7")],
+    ],
+)
+def test_204_never_serializes_message_framing_headers(
+    headers: List[Tuple[str, str]],
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(b"GET / HTTP/1.1\r\nHost: site\r\n\r\n")
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    response_wire = c.send(Response(status_code=204, headers=headers))
+    assert b"Content-Length:" not in response_wire
+    assert b"Transfer-Encoding:" not in response_wire
+    c.send(EndOfMessage())
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("Content-Length", "7")],
+        [("Transfer-Encoding", "chunked")],
+        [("Content-Length", "7"), ("Transfer-Encoding", "chunked")],
+        [("Transfer-Encoding", "chunked"), ("Content-Length", "7")],
+    ],
+)
+def test_successful_connect_never_serializes_message_framing_headers(
+    headers: List[Tuple[str, str]],
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(b"CONNECT site:443 HTTP/1.1\r\nHost: site:443\r\n\r\n")
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    response_wire = c.send(Response(status_code=200, headers=headers))
+    assert b"Content-Length:" not in response_wire
+    assert b"Transfer-Encoding:" not in response_wire
+    assert c.our_state is SWITCHED_PROTOCOL
 
 
 def test_automagic_connection_close_handling() -> None:
@@ -839,7 +886,7 @@ def test_protocol_switch() -> None:
                 headers=[("Host", "foo"), ("Content-Length", "1")],
             ),
             Response(status_code=404, headers=[(b"transfer-encoding", b"chunked")]),
-            Response(status_code=200, headers=[(b"transfer-encoding", b"chunked")]),
+            Response(status_code=200, headers=[]),
         ),
         (
             Request(
@@ -857,8 +904,8 @@ def test_protocol_switch() -> None:
                 headers=[("Host", "foo"), ("Content-Length", "1"), ("Upgrade", "a, b")],
             ),
             Response(status_code=404, headers=[(b"transfer-encoding", b"chunked")]),
-            # Accept CONNECT, not upgrade
-            Response(status_code=200, headers=[(b"transfer-encoding", b"chunked")]),
+            # Accept CONNECT, not upgrade; a successful tunnel has no framing headers.
+            Response(status_code=200, headers=[]),
         ),
         (
             Request(

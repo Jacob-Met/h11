@@ -698,10 +698,15 @@ class Connection:
                     need_close = True
             else:
                 headers = set_comma_header(headers, b"transfer-encoding", [b"chunked"])
-        elif (
-            response.status_code in (204, 304) or self._request_method == b"CONNECT"
-        ) and _has_conflicting_framing(headers):
-            # Bodyless responses also must not send both framing headers.
+        elif response.status_code == 204 or (
+            self._request_method == b"CONNECT" and 200 <= response.status_code < 300
+        ):
+            # 204 and successful CONNECT responses cannot carry framing headers
+            # at all (RFC 9112 section 6.1, RFC 9110 section 8.6).
+            headers = set_comma_header(headers, b"content-length", [])
+            headers = set_comma_header(headers, b"transfer-encoding", [])
+        elif response.status_code == 304 and _has_conflicting_framing(headers):
+            # 304 can advertise a Content-Length only without Transfer-Encoding.
             headers = set_comma_header(headers, b"content-length", [])
 
         if not self._cstate.keep_alive or need_close:
