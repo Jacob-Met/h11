@@ -1,0 +1,1 @@
+Reject HTTP/1.0 messages containing Transfer-Encoding instead of parsing their bodies as chunked framing.

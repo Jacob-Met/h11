@@ -273,6 +273,18 @@ class Connection:
         # First, pass the event through the state machine to make sure it
         # succeeds.
         old_states = dict(self._cstate.states)
+        if role is self.their_role and type(event) in (
+            Request,
+            Response,
+            InformationalResponse,
+        ):
+            message = cast(Union[Request, Response, InformationalResponse], event)
+            if message.http_version < b"1.1" and get_comma_header(
+                message.headers, b"transfer-encoding"
+            ):
+                # HTTP/1.0 has no transfer coding. Treat framing as faulty
+                # rather than misinterpreting a chunked body (RFC 9112 6.1).
+                raise RemoteProtocolError("Transfer-Encoding in HTTP/1.0 message")
         if role is CLIENT and type(event) is Request:
             if event.method == b"CONNECT":
                 self._cstate.process_client_switch_proposal(_SWITCH_CONNECT)

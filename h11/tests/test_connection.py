@@ -1118,3 +1118,25 @@ def test_special_exceptions_for_lost_connection_in_message_body() -> None:
     with pytest.raises(RemoteProtocolError) as excinfo:
         c.next_event()
     assert "incomplete chunked read" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("role", [SERVER, CLIENT])
+def test_http10_peer_transfer_encoding_is_framing_error(role: Type[Sentinel]) -> None:
+    # RFC 9112 section 6.1: Transfer-Encoding in HTTP/1.0 is faulty
+    # framing. It must not cause a chunked body to be trusted.
+    connection = Connection(role)
+    if role is SERVER:
+        message = (
+            b"POST / HTTP/1.0\r\nHost: example.com\r\n"
+            b"Transfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+        )
+    else:
+        connection.send(
+            Request(method="GET", target="/", headers=[("Host", "example.com")])
+        )
+        connection.send(EndOfMessage())
+        message = b"HTTP/1.0 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
+    connection.receive_data(message)
+    with pytest.raises(RemoteProtocolError, match="Transfer-Encoding.*HTTP/1.0"):
+        connection.next_event()
+    assert connection.their_state is ERROR
