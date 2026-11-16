@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, Iterable, NoReturn, Optional, Tuple, Typ
 
 from ._abnf import chunk_header, header_field, request_line, status_line
 from ._events import Data, EndOfMessage, InformationalResponse, Request, Response
+from ._headers import validate_trailer_fields
 from ._receivebuffer import ReceiveBuffer
 from ._state import (
     CLIENT,
@@ -158,7 +159,9 @@ class ChunkedReader:
             lines = buf.maybe_extract_lines()
             if lines is None:
                 return None
-            return EndOfMessage(headers=list(_decode_header_lines(lines)))
+            headers = list(_decode_header_lines(lines))
+            validate_trailer_fields(headers)
+            return EndOfMessage(headers=headers)
         if self._bytes_to_discard:
             data = buf.maybe_extract_at_most(len(self._bytes_to_discard))
             if data is None:
