@@ -1,1 +1,1 @@
-Allow vertical tab and form feed in HTTP header values, matching Fetch's header-value definition.
+Allow vertical tab and form feed in HTTP header values without relaxing status-line validation.

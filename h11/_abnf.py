@@ -49,12 +49,13 @@ field_name = token
 # that they're legal in practice (e.g., google analytics makes cookies with
 # \x01 in them!):
 #   https://github.com/python-hyper/h11/issues/57
-# NUL, CR, and LF remain forbidden, and HTTP tab/space are only allowed
-# between non-whitespace bytes. Unlike Python's \s, Fetch's header-value
-# definition permits vertical tab and form feed.
 vchar = r"[\x21-\x7e]"
-vchar_or_obs_text = r"[^\x00\r\n\t ]"
-field_vchar = vchar_or_obs_text
+# Keep the existing reason-phrase restrictions: Fetch's header-value
+# leniency must not change which whitespace controls status lines accept.
+vchar_or_obs_text = r"[^\x00\s]"
+# Unlike Python's \s, Fetch permits VT and FF in field values. NUL, CR,
+# and LF are forbidden; HTTP tab/space are allowed only between field bytes.
+field_vchar = r"[^\x00\r\n\t ]"
 field_content = r"{field_vchar}+(?:[ \t]+{field_vchar}+)*".format(**globals())
 
 # We handle obs-fold at a different level, and our fixed-up field_content
