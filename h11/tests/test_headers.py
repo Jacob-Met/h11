@@ -1,3 +1,6 @@
+from typing import Iterator, Tuple
+from unittest.mock import ANY
+
 import pytest
 
 from .._events import Request
@@ -9,6 +12,29 @@ from .._headers import (
     set_comma_header,
 )
 from .._util import LocalProtocolError
+
+
+def test_header_equality_unsupported_and_iterable_operands() -> None:
+    headers = normalize_and_validate([("Host", "example.com")])
+    assert not (headers == None)  # noqa: E711 - exercising ordinary equality
+    assert not (headers == 42)
+    assert headers == ANY
+    assert headers == [(b"host", b"example.com")]
+    assert headers == ((b"host", b"example.com"),)
+    assert headers == iter([(b"host", b"example.com")])
+
+    class OldStyleSequence:
+        def __getitem__(self, index: int) -> Tuple[bytes, bytes]:
+            return [(b"host", b"example.com")][index]
+
+    assert headers == OldStyleSequence()
+
+    class FailingIterator:
+        def __iter__(self) -> Iterator[Tuple[bytes, bytes]]:
+            raise TypeError("internal iterator failure")
+
+    with pytest.raises(TypeError, match="internal iterator failure"):
+        headers == FailingIterator()
 
 
 def test_normalize_and_validate() -> None:
