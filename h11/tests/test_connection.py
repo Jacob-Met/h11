@@ -1,8 +1,8 @@
-from typing import Any, cast, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 import pytest
 
-from .._connection import _body_framing, _keep_alive, Connection, NEED_DATA, PAUSED
+from .._connection import NEED_DATA, PAUSED, Connection, _body_framing, _keep_alive
 from .._events import (
     ConnectionClosed,
     Data,
@@ -11,6 +11,7 @@ from .._events import (
     Request,
     Response,
 )
+from .._headers import get_comma_header
 from .._state import (
     CLIENT,
     CLOSED,
@@ -333,6 +334,380 @@ def test_automatic_transfer_encoding_in_response() -> None:
         assert c.send(Data(data=b"12345")) == b"12345"
 
 
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_received_request_never_exposes_content_length(
+    framing_headers: bytes,
+) -> None:
+    # An ASGI proxy can forward the event's headers unchanged; do not expose
+    # the incompatible Content-Length that Transfer-Encoding overrides.
+    c = Connection(SERVER)
+    c.receive_data(
+        b"POST / HTTP/1.1\r\nHost: example.com\r\n" + framing_headers + b"\r\n0\r\n\r\n"
+    )
+    request = c.next_event()
+    assert isinstance(request, Request)
+    assert get_comma_header(request.headers, b"transfer-encoding") == [b"chunked"]
+    assert get_comma_header(request.headers, b"content-length") == []
+    assert not c._cstate.keep_alive
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.their_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_received_response_never_exposes_content_length(
+    framing_headers: bytes,
+) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="GET", target="/", headers=[("Host", "example.com")]))
+    c.send(EndOfMessage())
+    c.receive_data(b"HTTP/1.1 200 OK\r\n" + framing_headers + b"\r\n0\r\n\r\n")
+    response = c.next_event()
+    assert isinstance(response, Response)
+    assert get_comma_header(response.headers, b"transfer-encoding") == [b"chunked"]
+    assert get_comma_header(response.headers, b"content-length") == []
+    assert not c._cstate.keep_alive
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.their_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_incoming_request_cannot_reuse_connection(
+    framing_headers: bytes,
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(
+        b"POST / HTTP/1.1\r\nHost: example.com\r\n" + framing_headers + b"\r\n0\r\n\r\n"
+    )
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.their_state is MUST_CLOSE
+
+    response = c.send(Response(status_code=200, headers=[("Content-Length", "0")]))
+    assert b"Connection: close\r\n" in response
+    c.send(EndOfMessage())
+    assert c.our_state is MUST_CLOSE
+    with pytest.raises(LocalProtocolError, match="not in a reusable state"):
+        c.start_next_cycle()
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_incoming_response_cannot_reuse_connection(
+    framing_headers: bytes,
+) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="GET", target="/", headers=[("Host", "example.com")]))
+    c.send(EndOfMessage())
+    c.receive_data(b"HTTP/1.1 200 OK\r\n" + framing_headers + b"\r\n0\r\n\r\n")
+    assert isinstance(c.next_event(), Response)
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.our_state is MUST_CLOSE
+    assert c.their_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        [("Content-Length", "7"), ("Transfer-Encoding", "chunked")],
+        [("Transfer-Encoding", "chunked"), ("Content-Length", "7")],
+    ],
+)
+def test_ambiguous_outgoing_request_removes_content_length(
+    framing_headers: List[Tuple[str, str]]
+) -> None:
+    c = Connection(CLIENT)
+    request = Request(
+        method="POST", target="/", headers=[("Host", "example.com")] + framing_headers
+    )
+    wire = c.send(request)
+    assert b"Transfer-Encoding: chunked\r\n" in wire
+    assert b"Content-Length:" not in wire
+    assert c._cstate.keep_alive
+    assert get_comma_header(request.headers, b"content-length") == [b"7"]
+
+
+@pytest.mark.parametrize("status_code", [204, 304])
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        [("Content-Length", "7"), ("Transfer-Encoding", "chunked")],
+        [("Transfer-Encoding", "chunked"), ("Content-Length", "7")],
+    ],
+)
+def test_ambiguous_outgoing_bodyless_response_removes_content_length(
+    status_code: int, framing_headers: List[Tuple[str, str]]
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+
+    wire = c.send(Response(status_code=status_code, headers=framing_headers))
+    if status_code == 204:
+        assert b"Transfer-Encoding:" not in wire
+    else:
+        assert b"Transfer-Encoding: chunked\r\n" in wire
+    assert b"Content-Length:" not in wire
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 5\r\n",
+    ],
+)
+@pytest.mark.parametrize(
+    "request_line, switch_headers",
+    [
+        (b"CONNECT site:443 HTTP/1.1\r\n", b""),
+        (
+            b"GET / HTTP/1.1\r\n",
+            b"Connection: Upgrade\r\nUpgrade: websocket\r\n",
+        ),
+    ],
+)
+def test_ambiguous_request_cannot_offer_protocol_switch(
+    headers: bytes, request_line: bytes, switch_headers: bytes
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(
+        request_line + b"Host: site\r\n" + switch_headers + headers + b"\r\n0\r\n\r\n"
+    )
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.their_state is MUST_CLOSE
+
+    response = c.send(Response(status_code=400, headers=[("Content-Length", "0")]))
+    assert b"Connection: close\r\n" in response
+    c.send(EndOfMessage())
+    assert c.our_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 5\r\n",
+    ],
+)
+def test_ambiguous_upgrade_request_cannot_switch_with_101(headers: bytes) -> None:
+    c = Connection(SERVER)
+    c.receive_data(
+        b"GET / HTTP/1.1\r\nHost: site\r\n"
+        b"Connection: Upgrade\r\nUpgrade: websocket\r\n" + headers + b"\r\n0\r\n\r\n"
+    )
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    with pytest.raises(LocalProtocolError):
+        c.send(
+            InformationalResponse(
+                status_code=101,
+                headers=[("Connection", "Upgrade"), ("Upgrade", "websocket")],
+            )
+        )
+
+
+@pytest.mark.parametrize("status_code", [100, 101])
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("Content-Length", "7"), ("Transfer-Encoding", "chunked")],
+        [("Transfer-Encoding", "chunked"), ("Content-Length", "7")],
+    ],
+)
+def test_ambiguous_informational_response_outgoing_headers_removed(
+    status_code: int, headers: List[Tuple[str, str]]
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(
+        b"GET / HTTP/1.1\r\nHost: example\r\n"
+        b"Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n"
+    )
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    wire = c.send(
+        InformationalResponse(
+            status_code=status_code,
+            headers=headers + [("Connection", "Upgrade"), ("Upgrade", "websocket")],
+        )
+    )
+    assert b"Content-Length:" not in wire
+    assert b"Transfer-Encoding:" not in wire
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\n",
+        b"Transfer-Encoding: chunked\r\n",
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_informational_101_upgrade_is_rejected(
+    framing_headers: bytes,
+) -> None:
+    c = Connection(CLIENT)
+    c.send(
+        Request(
+            method="GET",
+            target="/",
+            headers=[
+                ("Host", "example"),
+                ("Connection", "Upgrade"),
+                ("Upgrade", "websocket"),
+            ],
+        )
+    )
+    c.send(EndOfMessage())
+    c.receive_data(
+        b"HTTP/1.1 101 Switching Protocols\r\n"
+        b"Connection: Upgrade\r\nUpgrade: websocket\r\n" + framing_headers + b"\r\n"
+    )
+    with pytest.raises(RemoteProtocolError):
+        c.next_event()
+    assert c.their_state is ERROR
+
+
+@pytest.mark.parametrize(
+    "framing_headers",
+    [
+        b"Content-Length: 7\r\n",
+        b"Transfer-Encoding: chunked\r\n",
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_ambiguous_informational_100_disables_keepalive(
+    framing_headers: bytes,
+) -> None:
+    c = Connection(CLIENT)
+    c.send(
+        Request(
+            method="POST",
+            target="/",
+            headers=[("Host", "example"), ("Content-Length", "0")],
+        )
+    )
+    c.send(EndOfMessage())
+    c.receive_data(
+        b"HTTP/1.1 100 Continue\r\n"
+        + framing_headers
+        + b"\r\n"
+        + b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+    )
+    assert isinstance(c.next_event(), InformationalResponse)
+    assert isinstance(c.next_event(), Response)
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.their_state is MUST_CLOSE
+    assert c.our_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("Content-Length", "7")],
+        [("Transfer-Encoding", "chunked")],
+        [("Content-Length", "7"), ("Transfer-Encoding", "chunked")],
+        [("Transfer-Encoding", "chunked"), ("Content-Length", "7")],
+    ],
+)
+def test_204_never_serializes_message_framing_headers(
+    headers: List[Tuple[str, str]],
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(b"GET / HTTP/1.1\r\nHost: site\r\n\r\n")
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    response_wire = c.send(Response(status_code=204, headers=headers))
+    assert b"Content-Length:" not in response_wire
+    assert b"Transfer-Encoding:" not in response_wire
+    c.send(EndOfMessage())
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        [("Content-Length", "7")],
+        [("Transfer-Encoding", "chunked")],
+        [("Content-Length", "7"), ("Transfer-Encoding", "chunked")],
+        [("Transfer-Encoding", "chunked"), ("Content-Length", "7")],
+    ],
+)
+def test_successful_connect_never_serializes_message_framing_headers(
+    headers: List[Tuple[str, str]],
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(b"CONNECT site:443 HTTP/1.1\r\nHost: site:443\r\n\r\n")
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    response_wire = c.send(Response(status_code=200, headers=headers))
+    assert b"Content-Length:" not in response_wire
+    assert b"Transfer-Encoding:" not in response_wire
+    assert c.our_state is SWITCHED_PROTOCOL
+
+
+@pytest.mark.parametrize(
+    "framing",
+    [
+        b"Content-Length: 5\r\n",
+        b"Transfer-Encoding: chunked\r\n",
+        b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n",
+    ],
+)
+def test_illegal_incoming_204_framing_cannot_reuse_connection(framing: bytes) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="GET", target="/", headers=[("Host", "example")]))
+    c.send(EndOfMessage())
+    c.receive_data(b"HTTP/1.1 204 No Content\r\n" + framing + b"\r\n")
+    assert isinstance(c.next_event(), Response)
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.our_state is MUST_CLOSE
+    assert c.their_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "framing",
+    [
+        b"Content-Length: 5\r\n",
+        b"Transfer-Encoding: chunked\r\n",
+        b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n",
+    ],
+)
+def test_illegal_incoming_connect_success_framing_is_rejected(framing: bytes) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="CONNECT", target="site:443", headers=[("Host", "site:443")]))
+    c.send(EndOfMessage())
+    c.receive_data(b"HTTP/1.1 200 Connection Established\r\n" + framing + b"\r\n")
+    with pytest.raises(RemoteProtocolError):
+        c.next_event()
+    assert c.their_state is ERROR
+
+
 def test_automagic_connection_close_handling() -> None:
     p = ConnectionPair()
     # If the user explicitly sets Connection: close, then we notice and
@@ -600,7 +975,7 @@ def test_protocol_switch() -> None:
                 headers=[("Host", "foo"), ("Content-Length", "1")],
             ),
             Response(status_code=404, headers=[(b"transfer-encoding", b"chunked")]),
-            Response(status_code=200, headers=[(b"transfer-encoding", b"chunked")]),
+            Response(status_code=200, headers=[]),
         ),
         (
             Request(
@@ -618,8 +993,8 @@ def test_protocol_switch() -> None:
                 headers=[("Host", "foo"), ("Content-Length", "1"), ("Upgrade", "a, b")],
             ),
             Response(status_code=404, headers=[(b"transfer-encoding", b"chunked")]),
-            # Accept CONNECT, not upgrade
-            Response(status_code=200, headers=[(b"transfer-encoding", b"chunked")]),
+            # Accept CONNECT, not upgrade; a successful tunnel has no framing headers.
+            Response(status_code=200, headers=[]),
         ),
         (
             Request(
@@ -1118,3 +1493,46 @@ def test_special_exceptions_for_lost_connection_in_message_body() -> None:
     with pytest.raises(RemoteProtocolError) as excinfo:
         c.next_event()
     assert "incomplete chunked read" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("status", [100, 103, 204])
+@pytest.mark.parametrize(
+    "framing",
+    [
+        b"Content-Length: 7\r\n",
+        b"Transfer-Encoding: chunked\r\n",
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+    ],
+)
+def test_forbidden_framing_not_exposed_on_received_bodyless_events(
+    status: int, framing: bytes
+) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="GET", target="/", headers=[("Host", "example.com")]))
+    c.send(EndOfMessage())
+    c.receive_data(
+        b"HTTP/1.1 " + str(status).encode("ascii") + b" Test\r\n" + framing + b"\r\n"
+    )
+    response = c.next_event()
+    assert isinstance(response, (Response, InformationalResponse))
+    assert response.status_code == status
+    assert response.reason == b"Test"
+    assert get_comma_header(response.headers, b"content-length") == []
+    assert get_comma_header(response.headers, b"transfer-encoding") == []
+    assert not c._cstate.keep_alive
+
+
+@pytest.mark.parametrize("status", [200, 304])
+def test_normal_received_content_length_is_preserved(status: int) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="GET", target="/", headers=[("Host", "example.com")]))
+    c.send(EndOfMessage())
+    c.receive_data(
+        b"HTTP/1.1 "
+        + str(status).encode("ascii")
+        + b" Test\r\nContent-Length: 7\r\n\r\n"
+    )
+    response = c.next_event()
+    assert isinstance(response, Response)
+    assert get_comma_header(response.headers, b"content-length") == [b"7"]
+    assert c._cstate.keep_alive

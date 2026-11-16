@@ -1,0 +1,1 @@
+Keep received HTTP messages that combine Transfer-Encoding with Content-Length from reusing their connections, and strip the overridden Content-Length before returning an event to applications that might forward it. Reject malformed framed protocol switches and normalize outgoing framing headers.
