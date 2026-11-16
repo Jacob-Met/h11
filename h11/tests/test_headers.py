@@ -9,8 +9,8 @@ from .._headers import (
     normalize_and_validate,
     set_comma_header,
 )
-from .._state import CLIENT
-from .._util import LocalProtocolError
+from .._state import CLIENT, SERVER
+from .._util import LocalProtocolError, RemoteProtocolError
 
 
 def test_normalize_and_validate() -> None:
@@ -180,3 +180,45 @@ def test_header_values_accept_fetch_allowed_controls(control: bytes) -> None:
     response = client.next_event()
     assert isinstance(response, Response)
     assert response.headers == [(b"x-test", value), (b"content-length", b"0")]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        b"\x0b5",
+        b"5\x0b",
+        b"5\x0c",
+        b"5,\x0b5",
+        b"\x1c5",
+        b"5\x1c",
+    ],
+)
+def test_content_length_rejects_non_http_whitespace(value: bytes) -> None:
+    # RFC 9110 8.6: Content-Length is digits, only HTTP OWS (SP/HTAB)
+    # can surround a field value. Python bytes.strip() is too permissive.
+    with pytest.raises(LocalProtocolError):
+        Request(
+            method="POST",
+            target="/",
+            headers=[(b"Host", b"example.com"), (b"Content-Length", value)],
+        )
+
+    peer = Connection(SERVER)
+    peer.receive_data(
+        b"POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: "
+        + value
+        + b"\r\n\r\n"
+    )
+    with pytest.raises(RemoteProtocolError):
+        peer.next_event()
+
+
+def test_comma_header_strips_http_ows_not_control_bytes() -> None:
+    headers = normalize_and_validate(
+        [(b"Connection", b"\x0bclose,\x0cupgrade ,  keep-alive")]
+    )
+    assert get_comma_header(headers, b"connection") == [
+        b"\x0bclose",
+        b"\x0cupgrade",
+        b"keep-alive",
+    ]

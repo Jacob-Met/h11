@@ -1,1 +1,1 @@
-Allow vertical tab and form feed in HTTP header values without relaxing status-line validation.
+Accept Fetch-permitted controls in generic HTTP field values, but do not interpret them as Content-Length whitespace or status-line characters.
