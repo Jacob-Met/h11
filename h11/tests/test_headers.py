@@ -3,7 +3,8 @@ from unittest.mock import ANY
 
 import pytest
 
-from .._events import Request
+from .._connection import Connection
+from .._events import EndOfMessage, Request, Response
 from .._headers import (
     get_comma_header,
     has_expect_100_continue,
@@ -11,6 +12,7 @@ from .._headers import (
     normalize_and_validate,
     set_comma_header,
 )
+from .._state import CLIENT
 from .._util import LocalProtocolError
 
 
@@ -183,3 +185,24 @@ def test_has_100_continue() -> None:
             http_version="1.0",
         )
     )
+
+
+@pytest.mark.parametrize("control", [b"\x0b", b"\x0c"])
+def test_header_values_accept_fetch_allowed_controls(control: bytes) -> None:
+    # Fetch's header-value definition excludes NUL, CR and LF, not VT or FF.
+    value = b"before" + control + b"after"
+    expected = [(b"x-test", value)]
+
+    assert normalize_and_validate(expected) == expected
+    assert normalize_and_validate([(b"x-test", control)]) == [(b"x-test", control)]
+    assert Response(status_code=200, headers=expected).headers == expected
+
+    client = Connection(CLIENT)
+    client.send(Request(method="GET", target="/", headers=[("host", "example.com")]))
+    client.send(EndOfMessage())
+    client.receive_data(
+        b"HTTP/1.1 200 OK\r\n" + b"X-Test: " + value + b"\r\nContent-Length: 0\r\n\r\n"
+    )
+    response = client.next_event()
+    assert isinstance(response, Response)
+    assert response.headers == [(b"x-test", value), (b"content-length", b"0")]

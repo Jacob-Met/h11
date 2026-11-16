@@ -56,7 +56,7 @@ def test_events() -> None:
         )
 
     # Header values are validated
-    for bad_char in "\x00\r\n\f\v":
+    for bad_char in "\x00\r\n":
         with pytest.raises(LocalProtocolError):
             req = Request(
                 method="GET",
