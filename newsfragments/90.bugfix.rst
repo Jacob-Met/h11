@@ -1,1 +1,1 @@
-Keep received HTTP messages that combine Transfer-Encoding with Content-Length from reusing their connections, and strip the overridden Content-Length before returning an event to applications that might forward it. Reject malformed framed protocol switches and normalize outgoing framing headers.
+Reject received requests containing both Transfer-Encoding and Content-Length before application dispatch. On responses, preserve Transfer-Encoding precedence but remove the overridden Content-Length and close the connection; also normalize forbidden framing on outgoing messages.

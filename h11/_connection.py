@@ -292,6 +292,13 @@ class Connection:
         if role is self.their_role:
             if type(event) is Request:
                 peer_conflict = _has_conflicting_framing(event.headers)
+                if peer_conflict:
+                    # On server ingress this ambiguity can become request
+                    # smuggling if another HTTP peer chooses Content-Length.
+                    # Reject before the application or a tunnel sees it.
+                    raise RemoteProtocolError(
+                        "both Transfer-Encoding and Content-Length headers"
+                    )
             elif type(event) in (Response, InformationalResponse):
                 reply = cast(Union[Response, InformationalResponse], event)
                 headers = reply.headers
@@ -323,7 +330,7 @@ class Connection:
                     peer_conflict = _has_conflicting_framing(headers)
         # A conflicting CONNECT/Upgrade request must not switch protocols,
         # which would bypass the mandatory close (RFC 9112 section 6.1).
-        if role is CLIENT and type(event) is Request and not peer_conflict:
+        if role is CLIENT and type(event) is Request:
             if event.method == b"CONNECT":
                 self._cstate.process_client_switch_proposal(_SWITCH_CONNECT)
             if get_comma_header(event.headers, b"upgrade"):
