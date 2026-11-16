@@ -4,3 +4,4 @@ Received informational and 204 responses now hide forbidden framing headers from
 Outgoing chunked trailers also reject authentication, content-format, conditional, and response-control fields that must be available in the header section.
 Servers now reject ambiguous incoming requests before application dispatch, while HTTP clients retain interoperable Transfer-Encoding precedence and mandatory close on ambiguous responses.
 Incoming chunked trailer fields now use the same forbidden-field policy as outgoing trailers, rejecting forged routing, authentication, framing and response-control metadata before exposing end-of-message events.
+Reject HTTP/1.0 messages containing Transfer-Encoding instead of decoding their bodies as HTTP/1.1 chunked framing.
