@@ -1,0 +1,1 @@
+Header comparisons with non-iterable objects now follow Python equality fallback behavior rather than raising TypeError.
