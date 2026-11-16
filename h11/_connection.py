@@ -286,57 +286,40 @@ class Connection:
         # First, pass the event through the state machine to make sure it
         # succeeds.
         old_states = dict(self._cstate.states)
-        # Only a peer's conflicting framing requires a connection close.
-        # Outbound messages are normalized before this state transition.
-        # A framing header is forbidden on informational responses, 204s,
-        # and successful CONNECT responses, even if the peer sends only one.
-        peer_forbidden_framing = (
-            role is self.their_role
-            and (
-                type(event) is InformationalResponse
-                or (
-                    type(event) is Response
-                    and (
-                        event.status_code == 204
-                        or (
-                            self._request_method == b"CONNECT"
-                            and 200 <= event.status_code < 300
-                        )
-                    )
-                )
-            )
-            and (
-                get_comma_header(
-                    event.headers,
-                    b"content-length",
-                )
-                or get_comma_header(
-                    event.headers,
-                    b"transfer-encoding",
-                )
-            )
-        )
-        peer_conflict = (
-            role is self.their_role
-            and type(event) in (Request, Response, InformationalResponse)
-            and _has_conflicting_framing(
-                cast(Union[Request, Response, InformationalResponse], event).headers
-            )
-        ) or peer_forbidden_framing
-        if (
-            peer_forbidden_framing
-            and role is SERVER
-            and (
-                (type(event) is InformationalResponse and event.status_code == 101)
-                or (
+        # Only headers received from the peer can force a defensive close.
+        peer_conflict = False
+        if role is self.their_role:
+            if type(event) is Request:
+                peer_conflict = _has_conflicting_framing(event.headers)
+            elif type(event) in (Response, InformationalResponse):
+                reply = cast(Union[Response, InformationalResponse], event)
+                headers = reply.headers
+                status_code = reply.status_code
+                connect_tunnel = (
                     type(event) is Response
                     and self._request_method == b"CONNECT"
-                    and 200 <= event.status_code < 300
+                    and 200 <= status_code < 300
                 )
-            )
-        ):
-            # Switching protocols would hide the mandatory close from callers.
-            raise RemoteProtocolError("Invalid message framing on protocol switch")
+                no_framing_permitted = (
+                    type(event) is InformationalResponse
+                    or status_code == 204
+                    or connect_tunnel
+                )
+                if no_framing_permitted:
+                    peer_conflict = bool(
+                        get_comma_header(headers, b"content-length")
+                        or get_comma_header(headers, b"transfer-encoding")
+                    )
+                    if peer_conflict and (
+                        connect_tunnel
+                        or (type(event) is InformationalResponse and status_code == 101)
+                    ):
+                        # Protocol switching cannot hide malformed framing.
+                        raise RemoteProtocolError(
+                            "Invalid message framing on protocol switch"
+                        )
+                else:
+                    peer_conflict = _has_conflicting_framing(headers)
         # A conflicting CONNECT/Upgrade request must not switch protocols,
         # which would bypass the mandatory close (RFC 9112 section 6.1).
         if role is CLIENT and type(event) is Request and not peer_conflict:
