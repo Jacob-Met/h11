@@ -1,8 +1,8 @@
-from typing import Any, cast, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 import pytest
 
-from .._connection import _body_framing, _keep_alive, Connection, NEED_DATA, PAUSED
+from .._connection import NEED_DATA, PAUSED, Connection, _body_framing, _keep_alive
 from .._events import (
     ConnectionClosed,
     Data,
@@ -341,31 +341,6 @@ def test_automatic_transfer_encoding_in_response() -> None:
         b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
     ],
 )
-def test_ambiguous_received_request_never_exposes_content_length(
-    framing_headers: bytes,
-) -> None:
-    # An ASGI proxy can forward the event's headers unchanged; do not expose
-    # the incompatible Content-Length that Transfer-Encoding overrides.
-    c = Connection(SERVER)
-    c.receive_data(
-        b"POST / HTTP/1.1\r\nHost: example.com\r\n" + framing_headers + b"\r\n0\r\n\r\n"
-    )
-    request = c.next_event()
-    assert isinstance(request, Request)
-    assert get_comma_header(request.headers, b"transfer-encoding") == [b"chunked"]
-    assert get_comma_header(request.headers, b"content-length") == []
-    assert not c._cstate.keep_alive
-    assert isinstance(c.next_event(), EndOfMessage)
-    assert c.their_state is MUST_CLOSE
-
-
-@pytest.mark.parametrize(
-    "framing_headers",
-    [
-        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
-        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
-    ],
-)
 def test_ambiguous_received_response_never_exposes_content_length(
     framing_headers: bytes,
 ) -> None:
@@ -380,32 +355,6 @@ def test_ambiguous_received_response_never_exposes_content_length(
     assert not c._cstate.keep_alive
     assert isinstance(c.next_event(), EndOfMessage)
     assert c.their_state is MUST_CLOSE
-
-
-@pytest.mark.parametrize(
-    "framing_headers",
-    [
-        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
-        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
-    ],
-)
-def test_ambiguous_incoming_request_cannot_reuse_connection(
-    framing_headers: bytes,
-) -> None:
-    c = Connection(SERVER)
-    c.receive_data(
-        b"POST / HTTP/1.1\r\nHost: example.com\r\n" + framing_headers + b"\r\n0\r\n\r\n"
-    )
-    assert isinstance(c.next_event(), Request)
-    assert isinstance(c.next_event(), EndOfMessage)
-    assert c.their_state is MUST_CLOSE
-
-    response = c.send(Response(status_code=200, headers=[("Content-Length", "0")]))
-    assert b"Connection: close\r\n" in response
-    c.send(EndOfMessage())
-    assert c.our_state is MUST_CLOSE
-    with pytest.raises(LocalProtocolError, match="not in a reusable state"):
-        c.start_next_cycle()
 
 
 @pytest.mark.parametrize(
@@ -497,14 +446,11 @@ def test_ambiguous_request_cannot_offer_protocol_switch(
     c.receive_data(
         request_line + b"Host: site\r\n" + switch_headers + headers + b"\r\n0\r\n\r\n"
     )
-    assert isinstance(c.next_event(), Request)
-    assert isinstance(c.next_event(), EndOfMessage)
-    assert c.their_state is MUST_CLOSE
-
-    response = c.send(Response(status_code=400, headers=[("Content-Length", "0")]))
-    assert b"Connection: close\r\n" in response
-    c.send(EndOfMessage())
-    assert c.our_state is MUST_CLOSE
+    with pytest.raises(
+        RemoteProtocolError, match="both Transfer-Encoding and Content-Length"
+    ):
+        c.next_event()
+    assert c.their_state is ERROR
 
 
 @pytest.mark.parametrize(
@@ -520,8 +466,10 @@ def test_ambiguous_upgrade_request_cannot_switch_with_101(headers: bytes) -> Non
         b"GET / HTTP/1.1\r\nHost: site\r\n"
         b"Connection: Upgrade\r\nUpgrade: websocket\r\n" + headers + b"\r\n0\r\n\r\n"
     )
-    assert isinstance(c.next_event(), Request)
-    assert isinstance(c.next_event(), EndOfMessage)
+    with pytest.raises(
+        RemoteProtocolError, match="both Transfer-Encoding and Content-Length"
+    ):
+        c.next_event()
     with pytest.raises(LocalProtocolError):
         c.send(
             InformationalResponse(
@@ -1644,3 +1592,26 @@ def test_outgoing_chunked_rejects_sensitive_trailer_field(
     with pytest.raises(LocalProtocolError, match="forbidden trailer"):
         c.send(EndOfMessage(headers=[("X-Checksum", "ok"), (name, value)]))
     assert c.our_state is ERROR
+
+
+@pytest.mark.parametrize(
+    "framing",
+    [
+        b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
+    ],
+)
+def test_mixed_framing_request_fails_before_application_dispatch(
+    framing: bytes,
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(
+        b"POST /first HTTP/1.1\r\nHost: example.org\r\n"
+        + framing
+        + b"\r\n0\r\n\r\nGET /second HTTP/1.1\r\nHost: example.org\r\n\r\n"
+    )
+    with pytest.raises(
+        RemoteProtocolError, match="both Transfer-Encoding and Content-Length"
+    ):
+        c.next_event()
+    assert c.their_state is ERROR

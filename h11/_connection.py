@@ -4,14 +4,14 @@ from dataclasses import replace
 from typing import (
     Any,
     Callable,
-    cast,
     Dict,
     List,
     Optional,
-    overload,
     Tuple,
     Type,
     Union,
+    cast,
+    overload,
 )
 
 from ._events import (
@@ -24,9 +24,9 @@ from ._events import (
     Response,
 )
 from ._headers import (
+    Headers,
     get_comma_header,
     has_expect_100_continue,
-    Headers,
     set_comma_header,
 )
 from ._readers import READERS, ReadersType
@@ -35,13 +35,13 @@ from ._state import (
     _SWITCH_CONNECT,
     _SWITCH_UPGRADE,
     CLIENT,
-    ConnectionState,
     DONE,
     ERROR,
     MIGHT_SWITCH_PROTOCOL,
     SEND_BODY,
     SERVER,
     SWITCHED_PROTOCOL,
+    ConnectionState,
 )
 from ._util import (  # Import the internal things we need
     LocalProtocolError,
@@ -292,6 +292,12 @@ class Connection:
         if role is self.their_role:
             if type(event) is Request:
                 peer_conflict = _has_conflicting_framing(event.headers)
+                if peer_conflict:
+                    # Reject ambiguous server ingress before an application
+                    # or a tunnel can disagree with another HTTP parser.
+                    raise RemoteProtocolError(
+                        "both Transfer-Encoding and Content-Length headers"
+                    )
             elif type(event) in (Response, InformationalResponse):
                 reply = cast(Union[Response, InformationalResponse], event)
                 headers = reply.headers
@@ -323,7 +329,7 @@ class Connection:
                     peer_conflict = _has_conflicting_framing(headers)
         # A conflicting CONNECT/Upgrade request must not switch protocols,
         # which would bypass the mandatory close (RFC 9112 section 6.1).
-        if role is CLIENT and type(event) is Request and not peer_conflict:
+        if role is CLIENT and type(event) is Request:
             if event.method == b"CONNECT":
                 self._cstate.process_client_switch_proposal(_SWITCH_CONNECT)
             if get_comma_header(event.headers, b"upgrade"):
