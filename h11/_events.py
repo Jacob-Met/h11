@@ -219,7 +219,7 @@ class InformationalResponse(_ResponseBase):
             )
 
     # This is an unhashable type.
-    __hash__ = None  # type: ignore
+    __hash__ = None  # type: ignore[assignment,unused-ignore]
 
 
 @dataclass(init=False, frozen=True)
@@ -263,7 +263,7 @@ class Response(_ResponseBase):
             )
 
     # This is an unhashable type.
-    __hash__ = None  # type: ignore
+    __hash__ = None  # type: ignore[assignment,unused-ignore]
 
 
 @dataclass(init=False, frozen=True)
@@ -302,12 +302,15 @@ class Data(Event):
 
     __slots__ = ("data", "chunk_start", "chunk_end")
 
-    data: bytes
+    data: Union[bytes, bytearray]
     chunk_start: bool
     chunk_end: bool
 
     def __init__(
-        self, data: bytes, chunk_start: bool = False, chunk_end: bool = False
+        self,
+        data: Union[bytes, bytearray],
+        chunk_start: bool = False,
+        chunk_end: bool = False,
     ) -> None:
         object.__setattr__(self, "data", data)
         object.__setattr__(self, "chunk_start", chunk_start)

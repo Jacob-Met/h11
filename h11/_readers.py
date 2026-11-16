@@ -37,13 +37,15 @@ from ._util import LocalProtocolError, RemoteProtocolError, Sentinel, validate
 
 __all__ = ["READERS"]
 
+ByteChunk = Union[bytes, bytearray]
+
 header_field_re = re.compile(header_field.encode("ascii"))
 obs_fold_re = re.compile(rb"[ \t]+")
 
 
-def _obsolete_line_fold(lines: Iterable[bytes]) -> Iterable[bytes]:
+def _obsolete_line_fold(lines: Iterable[ByteChunk]) -> Iterable[ByteChunk]:
     it = iter(lines)
-    last: Optional[bytes] = None
+    last: Optional[ByteChunk] = None
     for line in it:
         match = obs_fold_re.match(line)
         if match:
@@ -63,7 +65,7 @@ def _obsolete_line_fold(lines: Iterable[bytes]) -> Iterable[bytes]:
 
 
 def _decode_header_lines(
-    lines: Iterable[bytes],
+    lines: Iterable[ByteChunk],
 ) -> Iterable[Tuple[bytes, bytes]]:
     for line in _obsolete_line_fold(lines):
         matches = validate(header_field_re, line, "illegal header line: {!r}", line)

@@ -1,0 +1,1 @@
+Correct strict-bytes typing for the complete receive path, including arbitrary buffer-protocol input and bytearray-backed body events, without copying received payloads or adding runtime dependencies.\n

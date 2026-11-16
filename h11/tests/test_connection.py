@@ -1,8 +1,9 @@
-from typing import Any, Dict, List, Optional, Tuple, Type, cast
+import array
+from typing import Any, cast, Dict, List, Optional, Tuple, Type
 
 import pytest
 
-from .._connection import NEED_DATA, PAUSED, Connection, _body_framing, _keep_alive
+from .._connection import _body_framing, _keep_alive, Connection, NEED_DATA, PAUSED
 from .._events import (
     ConnectionClosed,
     Data,
@@ -24,7 +25,7 @@ from .._state import (
     SERVER,
     SWITCHED_PROTOCOL,
 )
-from .._util import LocalProtocolError, RemoteProtocolError, Sentinel
+from .._util import LocalProtocolError, ReadableBuffer, RemoteProtocolError, Sentinel
 from .helpers import ConnectionPair, get_all_events, receive_and_get
 
 
@@ -237,6 +238,34 @@ def test_chunk_boundaries() -> None:
 
     conn.receive_data(b"0\r\n\r\n")
     assert conn.next_event() == EndOfMessage()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        bytearray(b"GET /buf HTTP/1.1\r\nHost: example.com\r\n\r\n"),
+        memoryview(b"GET /buf HTTP/1.1\r\nHost: example.com\r\n\r\n"),
+        array.array("B", b"GET /buf HTTP/1.1\r\nHost: example.com\r\n\r\n"),
+    ],
+)
+def test_receive_data_accepts_pep688_buffers(payload: ReadableBuffer) -> None:
+    conn = Connection(our_role=SERVER)
+    conn.receive_data(payload)
+    request = conn.next_event()
+    assert isinstance(request, Request)
+    assert request.target == b"/buf"
+    assert conn.next_event() == EndOfMessage()
+
+
+def test_receive_data_annotation_resolves_without_optional_imports() -> None:
+    from typing import get_type_hints
+
+    from .._receivebuffer import ReceiveBuffer
+
+    connection_type = get_type_hints(Connection.receive_data)["data"]
+    buffer_type = get_type_hints(ReceiveBuffer.__iadd__)["byteslike"]
+    assert connection_type == buffer_type
+    assert connection_type != bytes
 
 
 def test_client_talking_to_http10_server() -> None:

@@ -4,14 +4,14 @@ from dataclasses import replace
 from typing import (
     Any,
     Callable,
+    cast,
     Dict,
     List,
     Optional,
+    overload,
     Tuple,
     Type,
     Union,
-    cast,
-    overload,
 )
 
 from ._events import (
@@ -24,9 +24,9 @@ from ._events import (
     Response,
 )
 from ._headers import (
-    Headers,
     get_comma_header,
     has_expect_100_continue,
+    Headers,
     set_comma_header,
 )
 from ._readers import READERS, ReadersType
@@ -35,16 +35,17 @@ from ._state import (
     _SWITCH_CONNECT,
     _SWITCH_UPGRADE,
     CLIENT,
+    ConnectionState,
     DONE,
     ERROR,
     MIGHT_SWITCH_PROTOCOL,
     SEND_BODY,
     SERVER,
     SWITCHED_PROTOCOL,
-    ConnectionState,
 )
 from ._util import (  # Import the internal things we need
     LocalProtocolError,
+    ReadableBuffer,
     RemoteProtocolError,
     Sentinel,
 )
@@ -418,7 +419,7 @@ class Connection:
         """
         return (bytes(self._receive_buffer), self._receive_buffer_closed)
 
-    def receive_data(self, data: bytes) -> None:
+    def receive_data(self, data: ReadableBuffer) -> None:
         """Add data to our internal receive buffer.
 
         This does not actually do any processing on the data, just stores

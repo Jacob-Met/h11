@@ -1,4 +1,15 @@
-from typing import Any, Dict, NoReturn, Pattern, Tuple, Type, TypeVar, Union
+import sys
+from typing import (
+    Any,
+    Dict,
+    NoReturn,
+    Pattern,
+    Tuple,
+    Type,
+    TYPE_CHECKING,
+    TypeVar,
+    Union,
+)
 
 __all__ = [
     "ProtocolError",
@@ -6,7 +17,18 @@ __all__ = [
     "RemoteProtocolError",
     "validate",
     "bytesify",
+    "ReadableBuffer",
 ]
+
+
+# Buffer is only needed for static typing. Keep h11 dependency-free at runtime,
+# and expose a resolvable fallback for typing.get_type_hints on Python 3.8+.
+if TYPE_CHECKING:  # pragma: no cover
+    from typing_extensions import Buffer as ReadableBuffer
+elif sys.version_info >= (3, 12):
+    from collections.abc import Buffer as ReadableBuffer
+else:  # pragma: no cover
+    ReadableBuffer = Union[bytes, bytearray, memoryview]
 
 
 class ProtocolError(Exception):
@@ -82,7 +104,10 @@ class RemoteProtocolError(ProtocolError):
 
 
 def validate(
-    regex: Pattern[bytes], data: bytes, msg: str = "malformed data", *format_args: Any
+    regex: Pattern[bytes],
+    data: Union[bytes, bytearray],
+    msg: str = "malformed data",
+    *format_args: Any
 ) -> Dict[str, bytes]:
     match = regex.fullmatch(data)
     if not match:
