@@ -1,3 +1,4 @@
+from time import perf_counter
 from typing import Any, Callable, Generator, List
 
 import pytest
@@ -594,3 +595,21 @@ def test_host_comes_first() -> None:
         normalize_and_validate([("foo", "bar"), ("Host", "example.com")]),
         b"Host: example.com\r\nfoo: bar\r\n\r\n",
     )
+
+
+def test_chunked_reader_malformed_extension_scales_linearly() -> None:
+    # An embedded bare LF is invalid, but can precede a complete CRLF line.
+    # Regression guard: the extension and trailing OWS regex branches must not
+    # retry every possible division of a long whitespace sequence.
+    def parse(size: int) -> float:
+        buf = ReceiveBuffer()
+        buf += b"1;" + b" " * size + b"\n\r\n"
+        start = perf_counter()
+        with pytest.raises(LocalProtocolError):
+            ChunkedReader()(buf)
+        return perf_counter() - start
+
+    parse(16)  # Warm up the regex and exception path.
+    small = min(parse(1024) for _ in range(3))
+    large = min(parse(16384) for _ in range(3))
+    assert large < small * 64, (small, large)
