@@ -22,7 +22,12 @@ from ._events import (
     Request,
     Response,
 )
-from ._headers import get_comma_header, has_expect_100_continue, set_comma_header
+from ._headers import (
+    get_comma_header,
+    has_expect_100_continue,
+    Headers,
+    set_comma_header,
+)
 from ._readers import READERS, ReadersType
 from ._receivebuffer import ReceiveBuffer
 from ._state import (
@@ -81,18 +86,19 @@ DEFAULT_MAX_INCOMPLETE_EVENT_SIZE = 16 * 1024
 # our rule is:
 # - If someone says Connection: close, we will close
 # - If someone uses HTTP/1.0, we will close.
+def _has_conflicting_framing(headers: Headers) -> bool:
+    """True when both message-length headers are present."""
+    return bool(
+        get_comma_header(headers, b"transfer-encoding")
+        and get_comma_header(headers, b"content-length")
+    )
+
+
 def _keep_alive(event: Union[Request, Response]) -> bool:
     connection = get_comma_header(event.headers, b"connection")
     if b"close" in connection:
         return False
     if getattr(event, "http_version", b"1.1") < b"1.1":
-        return False
-    # A peer that sends both framing headers must not use a persistent
-    # connection, even though Transfer-Encoding determines body length.
-    # RFC 9112 section 6.1.
-    if get_comma_header(event.headers, b"transfer-encoding") and get_comma_header(
-        event.headers, b"content-length"
-    ):
         return False
     return True
 
@@ -280,7 +286,16 @@ class Connection:
         # First, pass the event through the state machine to make sure it
         # succeeds.
         old_states = dict(self._cstate.states)
-        if role is CLIENT and type(event) is Request:
+        # Only a peer's conflicting framing requires a connection close.
+        # Outbound messages are normalized before this state transition.
+        peer_conflict = (
+            role is self.their_role
+            and type(event) in (Request, Response)
+            and _has_conflicting_framing(cast(Union[Request, Response], event).headers)
+        )
+        # A conflicting CONNECT/Upgrade request must not switch protocols,
+        # which would bypass the mandatory close (RFC 9112 section 6.1).
+        if role is CLIENT and type(event) is Request and not peer_conflict:
             if event.method == b"CONNECT":
                 self._cstate.process_client_switch_proposal(_SWITCH_CONNECT)
             if get_comma_header(event.headers, b"upgrade"):
@@ -309,8 +324,9 @@ class Connection:
         # shows up on a 1xx InformationalResponse. I think the idea is that
         # this is not supposed to happen. In any case, if it does happen, we
         # ignore it.
-        if type(event) in (Request, Response) and not _keep_alive(
-            cast(Union[Request, Response], event)
+        if peer_conflict or (
+            type(event) in (Request, Response)
+            and not _keep_alive(cast(Union[Request, Response], event))
         ):
             self._cstate.process_keep_alive_disabled()
 
@@ -559,11 +575,7 @@ class Connection:
         if self.our_state is ERROR:
             raise LocalProtocolError("Can't send data when our state is ERROR")
         try:
-            if (
-                type(event) is Request
-                and get_comma_header(event.headers, b"transfer-encoding")
-                and get_comma_header(event.headers, b"content-length")
-            ):
+            if type(event) is Request and _has_conflicting_framing(event.headers):
                 # A sender must not include Content-Length with
                 # Transfer-Encoding (RFC 9112 section 6.2).
                 event = Request(
@@ -663,7 +675,9 @@ class Connection:
                     need_close = True
             else:
                 headers = set_comma_header(headers, b"transfer-encoding", [b"chunked"])
-        elif get_comma_header(headers, b"transfer-encoding"):
+        elif (
+            response.status_code in (204, 304) or self._request_method == b"CONNECT"
+        ) and _has_conflicting_framing(headers):
             # Bodyless responses also must not send both framing headers.
             headers = set_comma_header(headers, b"content-length", [])
 

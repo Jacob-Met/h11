@@ -422,6 +422,64 @@ def test_ambiguous_outgoing_bodyless_response_removes_content_length(
     assert b"Content-Length:" not in wire
 
 
+@pytest.mark.parametrize(
+    "headers",
+    [
+        b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 5\r\n",
+    ],
+)
+@pytest.mark.parametrize(
+    "request_line, switch_headers",
+    [
+        (b"CONNECT site:443 HTTP/1.1\r\n", b""),
+        (
+            b"GET / HTTP/1.1\r\n",
+            b"Connection: Upgrade\r\nUpgrade: websocket\r\n",
+        ),
+    ],
+)
+def test_ambiguous_request_cannot_offer_protocol_switch(
+    headers: bytes, request_line: bytes, switch_headers: bytes
+) -> None:
+    c = Connection(SERVER)
+    c.receive_data(
+        request_line + b"Host: site\r\n" + switch_headers + headers + b"\r\n0\r\n\r\n"
+    )
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.their_state is MUST_CLOSE
+
+    response = c.send(Response(status_code=400, headers=[("Content-Length", "0")]))
+    assert b"Connection: close\r\n" in response
+    c.send(EndOfMessage())
+    assert c.our_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n",
+        b"Transfer-Encoding: chunked\r\nContent-Length: 5\r\n",
+    ],
+)
+def test_ambiguous_upgrade_request_cannot_switch_with_101(headers: bytes) -> None:
+    c = Connection(SERVER)
+    c.receive_data(
+        b"GET / HTTP/1.1\r\nHost: site\r\n"
+        b"Connection: Upgrade\r\nUpgrade: websocket\r\n" + headers + b"\r\n0\r\n\r\n"
+    )
+    assert isinstance(c.next_event(), Request)
+    assert isinstance(c.next_event(), EndOfMessage)
+    with pytest.raises(LocalProtocolError):
+        c.send(
+            InformationalResponse(
+                status_code=101,
+                headers=[("Connection", "Upgrade"), ("Upgrade", "websocket")],
+            )
+        )
+
+
 def test_automagic_connection_close_handling() -> None:
     p = ConnectionPair()
     # If the user explicitly sets Connection: close, then we notice and
