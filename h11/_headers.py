@@ -1,5 +1,15 @@
 import re
-from typing import AnyStr, cast, List, overload, Sequence, Tuple, TYPE_CHECKING, Union
+from typing import (
+    AnyStr,
+    cast,
+    Iterable,
+    List,
+    overload,
+    Sequence,
+    Tuple,
+    TYPE_CHECKING,
+    Union,
+)
 
 from ._abnf import field_name, field_value
 from ._util import bytesify, LocalProtocolError, validate
@@ -10,7 +20,7 @@ if TYPE_CHECKING:
 try:
     from typing import Literal
 except ImportError:
-    from typing_extensions import Literal  # type: ignore
+    from typing_extensions import Literal  # type: ignore[assignment, unused-ignore]
 
 CONTENT_LENGTH_MAX_DIGITS = 20  # allow up to 1 billion TB - 1
 
@@ -73,6 +83,52 @@ _content_length_re = re.compile(rb"[0-9]+")
 _field_name_re = re.compile(field_name.encode("ascii"))
 _field_value_re = re.compile(field_value.encode("ascii"))
 
+# Framing, routing, and hop-by-hop control fields cannot be trailers.
+# RFC 9110 section 6.5.1; RFC 7230 section 4.1.2.
+_FORBIDDEN_TRAILER_FIELDS = frozenset(
+    (
+        # Routing and hop-by-hop controls
+        b"host",
+        b"connection",
+        b"proxy-connection",
+        b"keep-alive",
+        b"te",
+        b"upgrade",
+        # Message framing, content format, and representation metadata
+        b"content-length",
+        b"transfer-encoding",
+        b"trailer",
+        b"content-type",
+        b"content-encoding",
+        b"content-range",
+        b"content-disposition",
+        b"content-language",
+        b"content-location",
+        # Authentication and request/response controls
+        b"authorization",
+        b"proxy-authorization",
+        b"www-authenticate",
+        b"proxy-authenticate",
+        b"cookie",
+        b"set-cookie",
+        b"location",
+        b"cache-control",
+        b"if-match",
+        b"if-none-match",
+        b"if-modified-since",
+        b"if-unmodified-since",
+        b"if-range",
+        b"range",
+        b"expect",
+    )
+)
+
+
+def validate_trailer_fields(headers: Iterable[Tuple[bytes, bytes]]) -> None:
+    for name, _ in headers:
+        if name.lower() in _FORBIDDEN_TRAILER_FIELDS:
+            raise LocalProtocolError(f"forbidden trailer field: {name!r}")
+
 
 class Headers(Sequence[Tuple[bytes, bytes]]):
     """
@@ -108,6 +164,8 @@ class Headers(Sequence[Tuple[bytes, bytes]]):
         return bool(self._full_items)
 
     def __eq__(self, other: object) -> bool:
+        if not hasattr(other, "__iter__") and not hasattr(other, "__getitem__"):
+            return NotImplemented
         return list(self) == list(other)  # type: ignore
 
     def __len__(self) -> int:

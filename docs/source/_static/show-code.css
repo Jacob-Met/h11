@@ -1,0 +1,63 @@
+.h11-view-code {
+  display: block;
+  margin: 0.3rem 0.35rem 0.45rem auto;
+  padding: 0.25rem 0.65rem;
+  border: 1px solid #b9c9d5;
+  border-radius: 3px;
+  background: #f8fbfd;
+  color: #27618a;
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.h11-view-code:hover { background: #eaf3f9; }
+.h11-view-code:focus-visible,
+.h11-code-dialog button:focus-visible {
+  outline: 2px solid #2879b5;
+  outline-offset: 2px;
+}
+.h11-code-dialog {
+  box-sizing: border-box;
+  width: min(45rem, calc(100vw - 2rem));
+  max-width: 100%;
+  max-height: 85vh;
+  padding: 1.25rem;
+  border: 1px solid #a6bac8;
+  border-radius: 6px;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 22%);
+}
+.h11-code-dialog::backdrop { background: rgb(12 31 45 / 45%); }
+.h11-code-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 0.85rem;
+}
+.h11-code-dialog h2 { margin: 0; font-size: 1.1rem; }
+.h11-code-dialog button {
+  padding: 0.25rem 0.7rem;
+  border: 1px solid #a6bac8;
+  border-radius: 3px;
+  background: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+.h11-code-dialog textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 7rem;
+  max-height: 56vh;
+  padding: 0.8rem;
+  border: 1px solid #b9c9d5;
+  border-radius: 3px;
+  color: #24333d;
+  background: #f8fafb;
+  font: 0.88rem/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+@media (max-width: 650px) {
+  /* Keep long examples and diagrams scrollable without shrinking the page. */
+  .document .body { overflow-x: auto; }
+}

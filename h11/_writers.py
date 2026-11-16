@@ -10,13 +10,13 @@
 from typing import Any, Callable, Dict, List, Tuple, Type, Union
 
 from ._events import Data, EndOfMessage, Event, InformationalResponse, Request, Response
-from ._headers import Headers
+from ._headers import Headers, validate_trailer_fields
 from ._state import CLIENT, IDLE, SEND_BODY, SEND_RESPONSE, SERVER
 from ._util import LocalProtocolError, Sentinel
 
 __all__ = ["WRITERS"]
 
-Writer = Callable[[bytes], Any]
+Writer = Callable[[Union[bytes, bytearray]], Any]
 
 
 def write_headers(headers: Headers, write: Writer) -> None:
@@ -47,14 +47,6 @@ def write_any_response(
     if response.http_version != b"1.1":
         raise LocalProtocolError("I only send HTTP/1.1")
     status_bytes = str(response.status_code).encode("ascii")
-    # We don't bother sending ascii status messages like "OK"; they're
-    # optional and ignored by the protocol. (But the space after the numeric
-    # status code is mandatory.)
-    #
-    # XX FIXME: could at least make an effort to pull out the status message
-    # from stdlib's http.HTTPStatus table. Or maybe just steal their enums
-    # (either by import or copy/paste). We already accept them as status codes
-    # since they're of type IntEnum < int.
     write(b"HTTP/1.1 %s %s\r\n" % (status_bytes, response.reason))
     write_headers(response.headers, write)
 
@@ -68,7 +60,7 @@ class BodyWriter:
         else:  # pragma: no cover
             assert False
 
-    def send_data(self, data: bytes, write: Writer) -> None:
+    def send_data(self, data: Union[bytes, bytearray], write: Writer) -> None:
         pass
 
     def send_eom(self, headers: Headers, write: Writer) -> None:
@@ -85,7 +77,7 @@ class ContentLengthWriter(BodyWriter):
     def __init__(self, length: int) -> None:
         self._length = length
 
-    def send_data(self, data: bytes, write: Writer) -> None:
+    def send_data(self, data: Union[bytes, bytearray], write: Writer) -> None:
         self._length -= len(data)
         if self._length < 0:
             raise LocalProtocolError("Too much data for declared Content-Length")
@@ -99,7 +91,7 @@ class ContentLengthWriter(BodyWriter):
 
 
 class ChunkedWriter(BodyWriter):
-    def send_data(self, data: bytes, write: Writer) -> None:
+    def send_data(self, data: Union[bytes, bytearray], write: Writer) -> None:
         # if we encoded 0-length data in the naive way, it would look like an
         # end-of-message.
         if not data:
@@ -109,12 +101,13 @@ class ChunkedWriter(BodyWriter):
         write(b"\r\n")
 
     def send_eom(self, headers: Headers, write: Writer) -> None:
+        validate_trailer_fields(headers)
         write(b"0\r\n")
         write_headers(headers, write)
 
 
 class Http10Writer(BodyWriter):
-    def send_data(self, data: bytes, write: Writer) -> None:
+    def send_data(self, data: Union[bytes, bytearray], write: Writer) -> None:
         write(data)
 
     def send_eom(self, headers: Headers, write: Writer) -> None:
