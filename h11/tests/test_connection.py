@@ -514,6 +514,8 @@ def test_ambiguous_informational_response_outgoing_headers_removed(
 @pytest.mark.parametrize(
     "framing_headers",
     [
+        b"Content-Length: 7\r\n",
+        b"Transfer-Encoding: chunked\r\n",
         b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
         b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
     ],
@@ -546,6 +548,8 @@ def test_ambiguous_informational_101_upgrade_is_rejected(
 @pytest.mark.parametrize(
     "framing_headers",
     [
+        b"Content-Length: 7\r\n",
+        b"Transfer-Encoding: chunked\r\n",
         b"Content-Length: 7\r\nTransfer-Encoding: chunked\r\n",
         b"Transfer-Encoding: chunked\r\nContent-Length: 7\r\n",
     ],
@@ -617,6 +621,43 @@ def test_successful_connect_never_serializes_message_framing_headers(
     assert b"Content-Length:" not in response_wire
     assert b"Transfer-Encoding:" not in response_wire
     assert c.our_state is SWITCHED_PROTOCOL
+
+
+@pytest.mark.parametrize(
+    "framing",
+    [
+        b"Content-Length: 5\r\n",
+        b"Transfer-Encoding: chunked\r\n",
+        b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n",
+    ],
+)
+def test_illegal_incoming_204_framing_cannot_reuse_connection(framing: bytes) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="GET", target="/", headers=[("Host", "example")]))
+    c.send(EndOfMessage())
+    c.receive_data(b"HTTP/1.1 204 No Content\r\n" + framing + b"\r\n")
+    assert isinstance(c.next_event(), Response)
+    assert isinstance(c.next_event(), EndOfMessage)
+    assert c.our_state is MUST_CLOSE
+    assert c.their_state is MUST_CLOSE
+
+
+@pytest.mark.parametrize(
+    "framing",
+    [
+        b"Content-Length: 5\r\n",
+        b"Transfer-Encoding: chunked\r\n",
+        b"Content-Length: 5\r\nTransfer-Encoding: chunked\r\n",
+    ],
+)
+def test_illegal_incoming_connect_success_framing_is_rejected(framing: bytes) -> None:
+    c = Connection(CLIENT)
+    c.send(Request(method="CONNECT", target="site:443", headers=[("Host", "site:443")]))
+    c.send(EndOfMessage())
+    c.receive_data(b"HTTP/1.1 200 Connection Established\r\n" + framing + b"\r\n")
+    with pytest.raises(RemoteProtocolError):
+        c.next_event()
+    assert c.their_state is ERROR
 
 
 def test_automagic_connection_close_handling() -> None:
