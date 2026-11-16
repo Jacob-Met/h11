@@ -532,8 +532,8 @@ class Connection:
             if event not in [NEED_DATA, PAUSED]:
                 self._process_event(self.their_role, cast(Event, event))
                 if (
-                    isinstance(event, (Request, Response))
-                    and not self._cstate.keep_alive
+                    not self._cstate.keep_alive
+                    and isinstance(event, (Request, Response))
                     and _has_conflicting_framing(event.headers)
                 ):
                     # A forwarding caller must not send the overridden
