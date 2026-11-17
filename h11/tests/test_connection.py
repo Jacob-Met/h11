@@ -1,9 +1,9 @@
 import array
-from typing import Any, cast, Dict, List, Optional, Tuple, Type
+from typing import Any, Dict, List, Optional, Tuple, Type, cast
 
 import pytest
 
-from .._connection import _body_framing, _keep_alive, Connection, NEED_DATA, PAUSED
+from .._connection import NEED_DATA, PAUSED, Connection, _body_framing, _keep_alive
 from .._events import (
     ConnectionClosed,
     Data,
@@ -319,6 +319,97 @@ def test_server_talking_to_http10_client() -> None:
     assert receive_and_get(c, b"234567890") == [Data(data=b"234567890"), EndOfMessage()]
     assert c.their_state is MUST_CLOSE
     assert receive_and_get(c, b"") == [ConnectionClosed()]
+
+
+@pytest.mark.parametrize("request_version", ["1.0", "1.1"])
+@pytest.mark.parametrize(
+    "response_headers",
+    [
+        [],
+        [("Content-Length", "0")],
+        [("Content-Length", "000")],
+        [("Transfer-Encoding", "chunked")],
+    ],
+)
+def test_205_reset_content_is_framed_as_empty(
+    request_version: str, response_headers: List[Tuple[str, str]]
+) -> None:
+    """RFC 9110 section 15.3.6 prohibits all content in 205 responses."""
+    conn = Connection(SERVER)
+    receive_and_get(
+        conn,
+        ("GET / HTTP/" + request_version + "\r\nHost: example.com\r\n\r\n").encode(
+            "ascii"
+        ),
+    )
+    header_bytes = conn.send(Response(status_code=205, headers=response_headers))
+    assert header_bytes is not None
+    assert b"Content-Length: 0\r\n" in header_bytes
+    assert b"Transfer-Encoding:" not in header_bytes
+    assert conn.send(EndOfMessage()) == b""
+
+    # A new response with the same framing must reject content *before* its
+    # EndOfMessage, not merely because the connection is already DONE.
+    rejected = Connection(SERVER)
+    receive_and_get(
+        rejected,
+        ("GET / HTTP/" + request_version + "\r\nHost: example.com\r\n\r\n").encode(
+            "ascii"
+        ),
+    )
+    rejected.send(Response(status_code=205, headers=response_headers))
+    with pytest.raises(LocalProtocolError, match="Too much data"):
+        rejected.send(Data(data=b"not allowed"))
+
+
+def test_205_keep_alive_roundtrip_two_requests() -> None:
+    """Reset Content has an unambiguous end and does not hang keep-alive."""
+    client = Connection(CLIENT)
+    server = Connection(SERVER)
+    for request_number in range(2):
+        request = Request(method="GET", target="/", headers=[("Host", "example.com")])
+        request_bytes = client.send(request)
+        assert request_bytes is not None
+        server.receive_data(request_bytes)
+        received = server.next_event()
+        assert isinstance(received, Request)
+        assert received.target == b"/"
+        assert client.send(EndOfMessage()) == b""
+        assert server.next_event() == EndOfMessage()
+
+        response_bytes = server.send(Response(status_code=205, headers=[]))
+        assert response_bytes is not None
+        assert b"Content-Length: 0\r\n" in response_bytes
+        assert server.send(EndOfMessage()) == b""
+        client.receive_data(response_bytes)
+        response = client.next_event()
+        assert isinstance(response, Response)
+        assert response.status_code == 205
+        assert client.next_event() == EndOfMessage()
+        if request_number == 0:
+            client.start_next_cycle()
+            server.start_next_cycle()
+
+
+def test_205_rejects_nonzero_declared_content_length() -> None:
+    conn = Connection(SERVER)
+    receive_and_get(conn, b"GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+    with pytest.raises(LocalProtocolError, match="205"):
+        conn.send(Response(status_code=205, headers=[("Content-Length", "1")]))
+    assert conn.our_state is ERROR
+
+
+def test_205_client_parses_noncompliant_peer_framing() -> None:
+    """A receiver still has to honor incoming lengths to avoid desynchronizing."""
+    conn = Connection(CLIENT)
+    conn.send(Request(method="GET", target="/", headers=[("Host", "example.com")]))
+    conn.send(EndOfMessage())
+    conn.receive_data(b"HTTP/1.1 205 Reset Content\r\nContent-Length: 1\r\n\r\nx")
+    event = conn.next_event()
+    assert isinstance(event, Response)
+    assert event.status_code == 205
+    assert conn.next_event() == Data(data=b"x")
+    assert conn.next_event() == EndOfMessage()
 
 
 def test_automatic_transfer_encoding_in_response() -> None:
