@@ -1,0 +1,1 @@
+Accept standard buffer-protocol input types in the annotated receive_data API, matching its existing runtime support.

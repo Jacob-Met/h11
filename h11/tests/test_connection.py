@@ -1,3 +1,4 @@
+from array import array
 from typing import Any, cast, Dict, List, Optional, Tuple, Type
 
 import pytest
@@ -1118,3 +1119,25 @@ def test_special_exceptions_for_lost_connection_in_message_body() -> None:
     with pytest.raises(RemoteProtocolError) as excinfo:
         c.next_event()
     assert "incomplete chunked read" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    "make_buffer",
+    [bytes, bytearray, memoryview, lambda data: array("B", data)],
+    ids=["bytes", "bytearray", "memoryview", "array"],
+)
+def test_receive_data_buffer_protocol(make_buffer: Any) -> None:
+    conn = Connection(SERVER)
+    conn.receive_data(
+        make_buffer(
+            b"POST / HTTP/1.1\r\nHost: example.com\r\nContent-Length: 3\r\n\r\n"
+        )
+    )
+    event = conn.next_event()
+    assert isinstance(event, Request)
+    assert event.method == b"POST"
+    conn.receive_data(make_buffer(b"abc"))
+    event = conn.next_event()
+    assert isinstance(event, Data)
+    assert event.data == b"abc"
+    assert isinstance(conn.next_event(), EndOfMessage)

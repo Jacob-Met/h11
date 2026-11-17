@@ -2,7 +2,16 @@ import re
 import sys
 from typing import List, Optional, Union
 
-__all__ = ["ReceiveBuffer"]
+# On Python 3.12+, Buffer expresses the complete buffer protocol. Keep
+# an annotation covering common providers on older supported Pythons.
+if sys.version_info >= (3, 12):
+    from collections.abc import Buffer as BufferInput
+else:
+    from array import array
+
+    BufferInput = Union[bytes, bytearray, memoryview, array]
+
+__all__ = ["ReceiveBuffer", "BufferInput"]
 
 
 # Operations we want to support:
@@ -50,7 +59,7 @@ class ReceiveBuffer:
         self._next_line_search = 0
         self._multiple_lines_search = 0
 
-    def __iadd__(self, byteslike: Union[bytes, bytearray]) -> "ReceiveBuffer":
+    def __iadd__(self, byteslike: BufferInput) -> "ReceiveBuffer":
         self._data += byteslike
         return self
 

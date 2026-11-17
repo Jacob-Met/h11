@@ -1,5 +1,6 @@
 import re
-from typing import Tuple
+from array import array
+from typing import Any, Tuple
 
 import pytest
 
@@ -133,3 +134,14 @@ def test_receivebuffer_for_invalid_delimiter(data: Tuple[bytes]) -> None:
         b"Connection: close",
     ]
     assert bytes(b) == b"Some body"
+
+
+@pytest.mark.parametrize(
+    "make_buffer",
+    [bytes, bytearray, memoryview, lambda data: array("B", data)],
+    ids=["bytes", "bytearray", "memoryview", "array"],
+)
+def test_receivebuffer_accepts_buffer_protocol(make_buffer: Any) -> None:
+    b = ReceiveBuffer()
+    b += make_buffer(b"abc")
+    assert bytes(b) == b"abc"
