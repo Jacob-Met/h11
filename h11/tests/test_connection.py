@@ -1,3 +1,5 @@
+import asyncio
+import socket
 from typing import Any, cast, Dict, List, Optional, Tuple, Type
 
 import pytest
@@ -1118,3 +1120,134 @@ def test_special_exceptions_for_lost_connection_in_message_body() -> None:
     with pytest.raises(RemoteProtocolError) as excinfo:
         c.next_event()
     assert "incomplete chunked read" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("chunk_size", [1, 2, 7, 64, 65536])
+def test_connection_buffered_input_matches_receive_data(chunk_size: int) -> None:
+    wire = (
+        b"POST /upload HTTP/1.1\r\n"
+        b"Host: example.test\r\n"
+        b"Transfer-Encoding: chunked\r\n"
+        b"\r\n"
+        b"5\r\nhello\r\n"
+        b"6\r\n world\r\n"
+        b"0\r\nX-Done: yes\r\n\r\n"
+    )
+
+    def receive(buffered: bool) -> List[Any]:
+        conn = Connection(SERVER)
+        events: List[Any] = []
+        for start in range(0, len(wire), chunk_size):
+            part = wire[start : start + chunk_size]
+            if buffered:
+                view = conn.get_buffer(len(part))
+                assert len(view) >= len(part)
+                view[: len(part)] = part
+                conn.buffer_updated(len(part))
+            else:
+                conn.receive_data(part)
+
+            while True:
+                event = conn.next_event()
+                if event in (NEED_DATA, PAUSED):
+                    break
+                events.append(event)
+        assert conn.trailing_data == (b"", False)
+        return events
+
+    baseline = receive(False)
+    buffered = receive(True)
+    assert baseline == buffered
+    assert isinstance(buffered[0], Request)
+    assert isinstance(buffered[-1], EndOfMessage)
+    assert all(isinstance(event, Data) for event in buffered[1:-1])
+    assert b"".join(event.data for event in buffered if isinstance(event, Data)) == (
+        b"hello world"
+    )
+
+
+def test_connection_writable_buffer_eof_and_invalid_request() -> None:
+    conn = Connection(SERVER)
+    view = conn.get_buffer()
+    view[:1] = b"\x16"
+    conn.buffer_updated(1)
+    with pytest.raises(RemoteProtocolError):
+        conn.next_event()
+
+    conn = Connection(SERVER)
+    view = conn.get_buffer()
+    conn.buffer_updated(0)
+    assert conn.next_event() is NEED_DATA
+    conn.receive_data(b"")
+    assert isinstance(conn.next_event(), ConnectionClosed)
+    with pytest.raises(RuntimeError, match="after EOF"):
+        conn.get_buffer()
+
+
+def test_asyncio_buffered_protocol_socketpair() -> None:
+    """Real asyncio BufferedProtocol uses the writable input path."""
+
+    async def serve() -> None:
+        loop = asyncio.get_running_loop()
+        server_sock, client_sock = socket.socketpair()
+        server_sock.setblocking(False)
+        client_sock.setblocking(False)
+        done: "asyncio.Future[List[Any]]" = loop.create_future()
+
+        class BufferedHTTPProtocol(asyncio.BufferedProtocol):
+            def __init__(self) -> None:
+                self.conn = Connection(SERVER)
+                self.events: List[Any] = []
+
+            def get_buffer(self, sizehint: int) -> memoryview:
+                return self.conn.get_buffer(sizehint)
+
+            def buffer_updated(self, nbytes: int) -> None:
+                self.conn.buffer_updated(nbytes)
+                while True:
+                    event = self.conn.next_event()
+                    if event in (NEED_DATA, PAUSED):
+                        return
+
+                    self.events.append(event)
+                    if isinstance(event, EndOfMessage):
+                        if not done.done():
+                            done.set_result(self.events)
+                        return
+
+        transport, _ = await loop.create_connection(
+            BufferedHTTPProtocol, sock=server_sock
+        )
+        try:
+            await loop.sock_sendall(
+                client_sock,
+                b"POST / HTTP/1.1\r\nHost: test\r\nContent-Length: 5\r\n\r\nhello",
+            )
+            events = await asyncio.wait_for(done, timeout=1)
+            assert [type(e) for e in events] == [Request, Data, EndOfMessage]
+            assert events[1].data == b"hello"
+        finally:
+            transport.close()
+            client_sock.close()
+
+    asyncio.run(serve())
+
+
+def test_connection_must_commit_writable_input_before_parsing() -> None:
+    conn = Connection(SERVER)
+    view = conn.get_buffer(3)
+    view[:3] = b"GET"
+    with pytest.raises(RuntimeError, match="before next_event"):
+        conn.next_event()
+    with pytest.raises(RuntimeError, match="before receive_data"):
+        conn.receive_data(b"")
+    with pytest.raises(RuntimeError, match="before receive_data"):
+        conn.receive_data(b"extra")
+
+    # The rejected calls did not poison the connection or the reservation.
+    conn.buffer_updated(3)
+    assert conn.trailing_data == (b"GET", False)
+    assert conn.next_event() is NEED_DATA
+    conn.receive_data(b" / HTTP/1.1\r\nHost: example.test\r\n\r\n")
+    assert isinstance(conn.next_event(), Request)
+    assert isinstance(conn.next_event(), EndOfMessage)

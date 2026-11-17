@@ -395,6 +395,8 @@ The Connection object
 .. autoclass:: Connection
 
    .. automethod:: receive_data
+   .. automethod:: get_buffer
+   .. automethod:: buffer_updated
    .. automethod:: next_event
    .. automethod:: send
    .. automethod:: send_with_data_passthrough
@@ -778,6 +780,26 @@ then you'll probably want logic that looks something like:
 And then your code that calls this will need to make sure to call it
 only at appropriate times (e.g., not immediately after receiving
 :class:`EndOfMessage` or :data:`PAUSED`).
+
+
+For a socket supporting socket.recv_into(), you can avoid allocating
+an intermediate bytes object and copying the bytes again into h11's
+receive buffer:
+
+.. code-block:: python
+
+   view = conn.get_buffer(65536)
+   received = sock.recv_into(view)
+   conn.buffer_updated(received)
+   if received == 0:
+       conn.receive_data(b"")  # EOF (zero-length update alone is not EOF)
+   # Call conn.next_event() to process the new data, as above.
+
+Each buffer reservation must be committed before requesting another
+buffer or passing bytes to Connection.receive_data(). The returned view is
+released by Connection.buffer_updated(). Do not use or retain the view
+after that call. The caller must still call Connection.next_event():
+receiving directly into the writable buffer does not parse input.
 
 If your I/O is organized around a "push" strategy, where the network
 drives processing (e.g. you're using `Twisted

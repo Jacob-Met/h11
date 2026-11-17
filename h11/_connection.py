@@ -400,12 +400,38 @@ class Connection:
                 and equivalent to calling it once.)
 
         """
+        if self._receive_buffer._pending_buffer is not None:
+            raise RuntimeError("call buffer_updated() before receive_data()")
         if data:
             if self._receive_buffer_closed:
                 raise RuntimeError("received close, then received more data?")
             self._receive_buffer += data
         else:
             self._receive_buffer_closed = True
+
+    def get_buffer(self, sizehint: int = -1) -> memoryview:
+        """Reserve writable input space for zero-copy socket reads.
+
+        The returned memoryview may be passed to socket.recv_into() or
+        returned from asyncio.BufferedProtocol.get_buffer(). Call
+        buffer_updated() with the number of bytes received, then
+        next_event() to process the input. A zero-length update is not EOF;
+        use receive_data(b"") to signal that the peer closed the stream.
+
+        Do not retain the view after calling buffer_updated(); it is released
+        then. Only one writable receive buffer can be outstanding.
+        """
+        if self._receive_buffer_closed:
+            raise RuntimeError("cannot reserve receive buffer after EOF")
+
+        return self._receive_buffer.get_buffer(sizehint)
+
+    def buffer_updated(self, nbytes: int) -> None:
+        """Commit a previous get_buffer() reservation."""
+        if self._receive_buffer_closed and nbytes:
+            raise RuntimeError("received close, then received more data?")
+
+        self._receive_buffer.buffer_updated(nbytes)
 
     def _extract_next_receive_event(
         self,
@@ -475,6 +501,8 @@ class Connection:
 
         """
 
+        if self._receive_buffer._pending_buffer is not None:
+            raise RuntimeError("call buffer_updated() before next_event()")
         if self.their_state is ERROR:
             raise RemoteProtocolError("Can't receive data when peer state is ERROR")
         try:
