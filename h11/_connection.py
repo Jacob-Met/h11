@@ -605,6 +605,20 @@ class Connection:
         headers = response.headers
         need_close = False
 
+        if response.status_code == 205:
+            # RFC 9110 section 15.3.6: a 205 Reset Content response must not
+            # carry content. Explicitly frame it as empty, rather than
+            # selecting a streaming body for responses without a length.
+            if any(
+                int(length) != 0
+                for length in get_comma_header(headers, b"content-length")
+            ):
+                raise LocalProtocolError(
+                    "205 Reset Content cannot have a nonzero Content-Length"
+                )
+            headers = set_comma_header(headers, b"transfer-encoding", [])
+            headers = set_comma_header(headers, b"content-length", [b"0"])
+
         # HEAD requests need some special handling: they always act like they
         # have Content-Length: 0, and that's how _body_framing treats
         # them. But their headers are supposed to match what we would send if
@@ -615,7 +629,11 @@ class Connection:
         method_for_choosing_headers = cast(bytes, self._request_method)
         if method_for_choosing_headers == b"HEAD":
             method_for_choosing_headers = b"GET"
-        framing_type, _ = _body_framing(method_for_choosing_headers, response)
+        framing_type, _ = (
+            ("content-length", (0,))
+            if response.status_code == 205
+            else _body_framing(method_for_choosing_headers, response)
+        )
         if framing_type in ("chunked", "http/1.0"):
             # This response has a body of unknown length.
             # If our peer is HTTP/1.1, we use Transfer-Encoding: chunked
